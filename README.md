@@ -55,3 +55,14 @@ python scripts/products/publish-release.py desktop
 ```
 
 The preview verifies the manifest signature, installer hashes, product version, fixed core and complete installer set. `--publish` additionally requires an existing public tag at the recorded product source commit. Release tags and publication are separate operations. Desktop update descriptors retain the established desktop signing key and channel.
+
+
+## Prepared source archive
+
+From the prepared build, create a source archive for another build machine:
+
+```sh
+python scripts/products/product.py archive desktop --destination ../calabi-desktop-source.zip --edge-ca <public-ca.crt>
+```
+
+The archive includes only recorded public source inputs, their provenance and the optional public CA. It works without a Git checkout and refuses development overrides, changed inputs or private keys. For a formal desktop release, build Windows and macOS from the same selected product source commit; validation installers are separate from release publication.

@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -143,14 +144,61 @@ def manifest(product, directory):
     print(sums, end="")
 
 
+def archive_source(product, destination, edge_ca=None):
+    version, core = config(product)
+    record = json.loads((ROOT / "product-build.json").read_text(encoding="utf-8"))
+    if record.get("local_override", True) or record.get("source_dirty", True) or record.get("source_repository") != "https://github.com/calabinet/calabi-" + product:
+        raise ValueError("source archives require clean public product inputs")
+    if record["product"] != product or record["version"] != version or record["core"] != core:
+        raise ValueError("source archive configuration differs from preparation")
+    if not record.get("inputs"):
+        raise ValueError("missing source input hashes")
+    for name, digest in record["inputs"].items():
+        source = ROOT / name
+        if Path(name).is_absolute() or ".." in Path(name).parts or not source.resolve().is_relative_to(ROOT):
+            raise ValueError("archive source escaped prepared build")
+        if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+            raise ValueError("source changed after preparation: " + name)
+    certificate = edge_ca.read_bytes() if edge_ca else None
+    if certificate and (b"BEGIN CERTIFICATE" not in certificate or b"PRIVATE KEY" in certificate):
+        raise ValueError("only a public PEM certificate may enter a source archive")
+    if destination.suffix != ".zip" or destination.exists():
+        raise ValueError("choose a new .zip destination")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    instructions = "# Prepared Calabi " + product + " source\n\nProduct " + version + "; core " + core["version"] + " at " + core["commit"] + ".\n\n"
+    instructions += "This archive includes the fixed public core and product sources. It needs no Git checkout. Verify source identities with product-build.json.\n\n"
+    if product == "desktop":
+        prefix = 'EDGE_CA="$PWD/calabi-edge-ca.pem" ' if certificate else ''
+        instructions += "On macOS, install Python 3, Go, Node.js, Rust/Tauri CLI and the native tools from README.md. Then run:\n\n```sh\n" + prefix + "bash scripts/build-desktop.sh --target universal-apple-darwin\nbash scripts/package-macos-pkg.sh\n```\n\n"
+    else:
+        instructions += "Install the pinned JDK, Android SDK/NDK, Go, gomobile and Gradle from README.md. Use scripts/mobile/build-release-android.ps1 for an officially signed upgrade; keep signing credentials outside the archive.\n\n"
+    instructions += "These sources are for validation. Formal publication, platform signing and device upgrade acceptance are separate release steps. Build both desktop platforms from the same selected product source commit.\n"
+    metadata = {"product": product, "version": version, "source_commit": record["source_commit"], "core": core,
+                "public_edge_ca_sha256": hashlib.sha256(certificate).hexdigest() if certificate else None}
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as output:
+        for name in sorted(record["inputs"]):
+            output.write(ROOT / name, name)
+        output.write(ROOT / "product-build.json", "product-build.json")
+        output.writestr("ARCHIVE-INSTRUCTIONS.md", instructions)
+        output.writestr("SOURCE-ARCHIVE.json", json.dumps(metadata, indent=2) + "\n")
+        if certificate:
+            output.writestr("calabi-edge-ca.pem", certificate)
+    print(json.dumps({**metadata, "archive": str(destination), "sha256": hashlib.sha256(destination.read_bytes()).hexdigest()}, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["check", "prepare", "manifest", "core-commit"])
+    parser.add_argument("action", choices=["check", "prepare", "manifest", "core-commit", "archive"])
     parser.add_argument("product", choices=PRODUCTS)
     parser.add_argument("--destination", type=Path)
+    parser.add_argument("--edge-ca", type=Path)
     parser.add_argument("--core-tree", type=Path, help="explicit development override; never releasable")
     args = parser.parse_args()
-    if args.action == "core-commit":
+    if args.action == "archive":
+        if not args.destination:
+            parser.error("archive requires --destination")
+        archive_source(args.product, args.destination.resolve(), args.edge_ca)
+    elif args.action == "core-commit":
         provenance = ROOT / "product-build.json"
         if provenance.is_file():
             core = json.loads(provenance.read_text(encoding="utf-8"))["core"]
