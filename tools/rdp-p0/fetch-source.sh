@@ -25,17 +25,17 @@ calabi_fetch_source() (
     echo "Missing local source archive: $archive (offline mode; no download attempted)" >&2
     exit 1
   fi
-  mkdir -p "$cache"
-  partial="$(mktemp "$cache/.${name}.part.XXXXXX")"
+  mkdir -p "$cache" || exit 1
+  partial="$(mktemp "$cache/.${name}.part.XXXXXX")" || exit 1
   trap 'rm -f "$partial"' EXIT
   echo "==> Downloading pinned source archive: $name" >&2
   curl --fail --show-error --progress-bar --location --connect-timeout 20 \
-    --max-time 900 --speed-limit 1024 --speed-time 60 --retry 3 "$url" -o "$partial"
+    --max-time 900 --speed-limit 1024 --speed-time 60 --retry 3 "$url" -o "$partial" || exit 1
   verify "$partial" || { echo "Downloaded source checksum mismatch: $name" >&2; exit 1; }
   # Another build may have populated the cache while this download was running.
   # Never replace an existing local archive, even if its checksum is incorrect.
-  mv -n "$partial" "$archive"
-  verify "$archive"
+  mv -n "$partial" "$archive" || exit 1
+  verify "$archive" || exit 1
   echo "==> Source archive cached: $archive" >&2
   printf '%s\n' "$archive"
 )
