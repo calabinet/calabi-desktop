@@ -46,6 +46,20 @@ def release(product, directory, publish=False):
     if os.name == "nt":
         cmd = ["pwsh", "-NoProfile", "-File", str(ROOT / "scripts/dev/build.ps1")] + cmd
     subprocess.run(cmd, cwd=ROOT, check=True)
+    if product == "desktop":
+        descriptor = directory / "latest.json"
+        update = json.loads(descriptor.read_text(encoding="utf-8"))
+        expected_platforms = {"windows-x86_64": "calabi-desktop-windows-x64-setup.exe", "darwin-universal": "calabi-desktop-macos-universal.pkg"}
+        if update["version"] != version or set(update["platforms"]) != set(expected_platforms):
+            raise ValueError("desktop update descriptor must contain only both desktop platforms at the product version")
+        for platform, name in expected_platforms.items():
+            entry = update["platforms"][platform]
+            if entry["sha256"] != sums[name] or not entry.get("signature"):
+                raise ValueError("desktop update artifact differs from release provenance")
+        verify_update = list(cmd)
+        verify_update[verify_update.index("--file")+1] = str(descriptor)
+        verify_update[verify_update.index("--sig")+1] = str(directory / "latest.json.sig")
+        subprocess.run(verify_update, cwd=ROOT, check=True)
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     section = re.search(r"^## " + re.escape(version) + r"[^\n]*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
     if not section:

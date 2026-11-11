@@ -104,7 +104,7 @@ def prepare(product, destination, override=None):
                 "source_dirty": bool(run("git", "status", "--porcelain", "--", *paths(product)))}
     if product == "android":
         manifest["toolchain"] = json.loads((ROOT / "apps/client-android/mobile-toolchain.json").read_text(encoding="utf-8"))
-    input_files = set(run("git", "ls-files", "--", "apps/client", "pkg", "go.work", "go.work.sum", "VERSION", cwd=dest).splitlines())
+    input_files = set(run("git", "ls-files", cwd=dest).splitlines())
     input_files.update(run("git", "ls-files", "--", *paths(product)).splitlines())
     manifest["inputs"] = {name: hashlib.sha256((dest / name).read_bytes()).hexdigest()
                           for name in sorted(input_files) if (dest / name).is_file()}
