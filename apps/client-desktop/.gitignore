@@ -1,7 +1,6 @@
 # Tauri / Cargo artifacts
 src-tauri/target/
 src-tauri/gen/
-src-tauri/Cargo.lock
 
 # Procedurally-regenerable icon source. The actual icon assets
 # (icon.ico, *.png, icon.icns) ARE committed — see scripts/gen-desktop-icons.*

@@ -17,10 +17,11 @@ Released for Windows (a setup `.exe`) and macOS (a `.pkg`).
 - **The app attaches to the service.** It finds the service's console and shows
   it in the window; the tray shows the service's state, checked every five
   seconds. A release build never starts a daemon of its own.
-- **Updates come from the service.** Signed in to calabi.net, the service checks
-  a signed manifest on `download.calabi.net` and installs new releases, as its
-  update settings in the console allow. A daemon on a self-hosted server does not
-  check. The app itself has no updater.
+- **Product updates come from the service.** The native window selects the desktop
+  product's signed update channel; a plain browser selects the running core's
+  channel. Both platform-connected and self-hosted modes support checking.
+  The desktop-owned daemon is upgraded with the desktop package. The app itself
+  has no separate updater.
 - The installers are not code-signed yet: Windows SmartScreen and macOS
   Gatekeeper warn on first open.
 
@@ -34,23 +35,30 @@ Needs Rust (stable), Go 1.25+ and the Tauri 2 CLI
 - Linux: `webkit2gtk-4.1-dev`, `libssl-dev`, `libgtk-3-dev`, `librsvg2-dev`,
   `libayatana-appindicator3-dev`.
 
-On Windows, put the client where the installer picks it up, then build:
+Build from a clean [public desktop checkout](https://github.com/calabinet/calabi-desktop):
 
-```bash
-( cd apps/client && go build -o ../client-desktop/src-tauri/binaries/calabi.exe ./cmd/calabi )
-cd apps/client-desktop/src-tauri
-cargo tauri build      # the installer is under target/release/bundle/nsis/
+```powershell
+python scripts/products/product.py prepare desktop --destination ../calabi-desktop-build
+Set-Location ../calabi-desktop-build
+pwsh -NoProfile -File scripts/build-desktop.ps1
 ```
 
-On macOS and Linux, `cargo tauri build` makes the app bundle. The released
-macOS `.pkg` wraps the `.app` together with the client and its LaunchDaemon.
+The product version is `apps/client-desktop/VERSION`; `core-source.json` fixes the
+public core version and complete commit. The prepared build supplies the daemon,
+shared console and notices. macOS packaging and production-CA instructions are in
+the public repository's root README. Formal builds use the pinned core console
+bundle and the committed Cargo.lock.
 
 ### Running it while developing
 
-```bash
-cd apps/client-desktop/src-tauri
-cargo tauri dev
+From the prepared build on Windows:
+
+```powershell
+Set-Location apps/client-desktop/src-tauri
+pwsh -NoProfile -File ../../../scripts/dev/build.ps1 cargo tauri dev
 ```
+
+On macOS, use `cargo tauri dev` in that same directory.
 
 A debug build attaches to a running service, like a release build. When there
 is none, it starts a daemon itself, looking for `calabi` in this order:
