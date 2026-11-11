@@ -19,12 +19,16 @@ On Windows use PowerShell 7:
 pwsh -NoProfile -File scripts/build-desktop.ps1
 ```
 
-On macOS:
+On macOS, reuse previously downloaded pinned source archives (OpenSSL 3.6.5 and FreeRDP 3.33.0) from your local directory:
 
 ```sh
-bash scripts/build-desktop.sh --target universal-apple-darwin
-bash scripts/package-macos-pkg.sh --app <path-to-Calabi.app> --daemon bin/calabi
+export CALABI_RDP_DOWNLOAD_DIR="$HOME/Downloads"
+export CALABI_RDP_OFFLINE=1
+EDGE_CA="$PWD/calabi-edge-ca.pem" bash scripts/build-desktop.sh --target universal-apple-darwin
+bash scripts/package-macos-pkg.sh --daemon bin/calabi
 ```
+
+Offline mode verifies each archive's fixed SHA-256 and never downloads. Missing or mismatched archives stop the build and preserve existing files. To allow a missing archive to download, unset `CALABI_RDP_OFFLINE`. Without an explicit download directory, verified downloads persist in `$HOME/Library/Caches/Calabi/rdp-sources` across builds; scratch SDK builds are separate and cleaned after bundling. Production builds need your deployment's public CA at the `EDGE_CA` path above.
 
 Builds without a supplied deployment Edge CA are development builds. For a production build, pass the deployment's **public** CA through `-EdgeCa` (Windows) or `EDGE_CA` (macOS). Keep signing keys and passwords outside the source tree. Existing application identifiers, service paths and credential stores are preserved.
 

@@ -2,6 +2,7 @@
 # Build a relocatable, pinned FreeRDP SDK for one macOS slice. No Homebrew
 # libraries are used. The caller combines and signs the runtime dylibs.
 set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/fetch-source.sh"
 arch="${1:?Pass arm64 or x86_64}"
 work="${2:?Pass an absolute scratch path}"
 case "$arch" in
@@ -20,11 +21,8 @@ export PKG_CONFIG_LIBDIR="$sdk/lib/pkgconfig"
 
 fetch() {
   local name="$1" url="$2" digest="$3"
-  local archive="$(dirname "$work")/$name"
-  if [[ ! -f "$archive" ]]; then
-    curl --fail --silent --show-error --location --retry 3 "$url" -o "$archive"
-  fi
-  printf '%s  %s\n' "$digest" "$archive" | shasum -a 256 -c -
+  local archive
+  archive="$(calabi_fetch_source "$name" "$url" "$digest")" || return 1
   tar -xf "$archive" -C "$work"
 }
 
@@ -33,6 +31,7 @@ fetch openssl-3.6.5.tar.gz https://github.com/openssl/openssl/releases/download/
 fetch freerdp-3.33.0.tar.xz https://pub.freerdp.com/releases/freerdp-3.33.0.tar.xz \
   9cea38e972e3775e1ce83b30e9ae0cbf8d00af1c708c640e6244fc81bdb1e08b
 
+echo "==> Building OpenSSL 3.6.5 for $arch"
 (
   cd "$work/openssl-3.6.5"
   # no-module builds the legacy provider into libcrypto. No module lookup in
@@ -66,6 +65,7 @@ for channel in "$src"/channels/*/ChannelOptions.cmake; do
     *) channel_args+=("-DCHANNEL_$name=OFF") ;;
   esac
 done
+echo "==> Building FreeRDP 3.33.0 for $arch"
 cmake -S "$src" -B "$work/build" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="$arch" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
   -DCMAKE_INSTALL_PREFIX="$sdk" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_NAME_DIR=@rpath \

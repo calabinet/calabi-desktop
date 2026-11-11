@@ -18,7 +18,9 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 for arch in "${archs[@]}"; do
+  echo "==> Preparing Mac RDP components for $arch"
   bash "$root/tools/rdp-p0/build-macos-sdk.sh" "$arch" "$work/$arch"
+  echo "==> Building and testing Mac RDP helper for $arch"
   helper="$(bash "$root/tools/rdp-p0/build-helper.sh" --release-sdk "$arch" "$work/$arch/sdk")"
   cp "$helper" "$work/$arch/calabi-rdp"
 done

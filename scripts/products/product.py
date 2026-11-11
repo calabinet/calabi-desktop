@@ -169,7 +169,7 @@ def archive_source(product, destination, edge_ca=None):
     instructions += "This archive includes the fixed public core and product sources. It needs no Git checkout. Verify source identities with product-build.json.\n\n"
     if product == "desktop":
         prefix = 'EDGE_CA="$PWD/calabi-edge-ca.pem" ' if certificate else ''
-        instructions += "On macOS, install Python 3, Go, Node.js, Rust/Tauri CLI and the native tools from README.md. Then run:\n\n```sh\n" + prefix + "bash scripts/build-desktop.sh --target universal-apple-darwin\nbash scripts/package-macos-pkg.sh\n```\n\n"
+        instructions += "On macOS, install Python 3, Go, Node.js, Rust/Tauri CLI and the native tools from README.md. Reuse openssl-3.6.5.tar.gz and freerdp-3.33.0.tar.xz from Downloads (fixed SHA-256 checks; offline mode never downloads). Then run:\n\n```sh\nexport CALABI_RDP_DOWNLOAD_DIR=\"$HOME/Downloads\"\nexport CALABI_RDP_OFFLINE=1\n" + prefix + "bash scripts/build-desktop.sh --target universal-apple-darwin\nbash scripts/package-macos-pkg.sh\n```\n\n"
     else:
         instructions += "Install the pinned JDK, Android SDK/NDK, Go, gomobile and Gradle from README.md. Use scripts/mobile/build-release-android.ps1 for an officially signed upgrade; keep signing credentials outside the archive.\n\n"
     instructions += "These sources are for validation. Formal publication, platform signing and device upgrade acceptance are separate release steps. Build both desktop platforms from the same selected product source commit.\n"
