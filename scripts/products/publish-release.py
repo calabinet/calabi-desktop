@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import zipfile
 from pathlib import Path
 
 from product import ROOT, config, run
@@ -38,6 +39,28 @@ def release(product, directory, publish=False):
     for name, digest in sums.items():
         if Path(name).name != name or hashlib.sha256((directory / name).read_bytes()).hexdigest() != digest:
             raise ValueError("installer digest mismatch: " + name)
+    if product == "android":
+        sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+        if not sdk:
+            raise ValueError("set ANDROID_HOME to verify the APK before release")
+        tools = sorted((Path(sdk) / "build-tools").iterdir(), key=lambda p: tuple(int(n) for n in p.name.split(".") if n.isdigit()))[-1]
+        apk = directory / "calabi-android.apk"
+        signer = tools / ("apksigner.bat" if os.name == "nt" else "apksigner")
+        certs = subprocess.check_output([str(signer), "verify", "--print-certs", str(apk)], text=True, encoding="utf-8", errors="replace")
+        pinned = (ROOT / "scripts/mobile/android-release-cert.sha256").read_text(encoding="utf-8").strip().replace(":", "").lower()
+        digests = [v.lower() for v in re.findall(r"certificate SHA-256 digest:\s*([0-9a-fA-F]+)", certs)]
+        if digests != [pinned]:
+            raise ValueError("APK signer differs from the established release certificate")
+        aapt = tools / ("aapt2.exe" if os.name == "nt" else "aapt2")
+        package = subprocess.check_output([str(aapt), "dump", "badging", str(apk)], text=True, encoding="utf-8", errors="replace").splitlines()[0]
+        code = sum(int(v) * scale for v, scale in zip(version.split("."), [1000000, 1000, 1]))
+        if "name='net.calabi.app'" not in package or f"versionName='{version}'" not in package or f"versionCode='{code}'" not in package:
+            raise ValueError("APK identity or version differs from product release metadata")
+        with zipfile.ZipFile(apk) as archive:
+            for abi in ["arm64-v8a", "armeabi-v7a"]:
+                library = archive.read("lib/" + abi + "/libgojni.so")
+                if core["commit"].encode() not in library or core["version"].encode() not in library:
+                    raise ValueError("APK core differs from the pinned source: " + abi)
     signature = directory / "build-manifest.json.sig"
     if not signature.is_file():
         raise ValueError("sign build-manifest.json with updatekit sign-file first")
