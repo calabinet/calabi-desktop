@@ -4,9 +4,13 @@ Native Calabi desktop application for Windows and macOS. The application bundles
 
 The product version is `apps/client-desktop/VERSION`. The shared core is maintained in [calabinet/calabi](https://github.com/calabinet/calabi); `apps/client-desktop/core-source.json` pins its version and complete public commit. Core source is fetched for builds, rather than maintained in this repository.
 
+## Download
+
+Use the [desktop releases](https://github.com/calabinet/calabi-desktop/releases/latest) for Windows x64 and macOS universal installers, checksums and signed provenance. The desktop version is independent of the bundled core version.
+
 ## Build
 
-Install Python 3.12+, Git, Go 1.25+, Node.js 20+, Rust with the Tauri CLI, and the platform's native build tools. Windows needs MSVC and WebView2. macOS needs Xcode Command Line Tools and the native dependencies documented in the RDP helper source under `tools/rdp-p0`.
+Install Python 3.12+, Git, Go 1.25+, Node.js 20+, Rust with the Tauri CLI, and the platform's native build tools. Windows needs PowerShell 7, MSVC and WebView2. Production RDP builds additionally need Python 3.14 (for tar.zst), MinGW-w64 UCRT GCC, CMake, Ninja and curl on PATH; see `tools/rdp-p0/build-windows-helper.py`. macOS needs Xcode Command Line Tools, CMake, pkg-config and Python 3 on PATH. The pinned FreeRDP/OpenSSL sources are built by `tools/rdp-p0/build-macos-sdk.sh`; a separate Homebrew FreeRDP/OpenSSL installation is not required.
 
 ```sh
 python scripts/products/product.py prepare desktop --destination ../calabi-desktop-build
@@ -19,12 +23,14 @@ On Windows use PowerShell 7:
 pwsh -NoProfile -File scripts/build-desktop.ps1
 ```
 
-On macOS, reuse previously downloaded pinned source archives (OpenSSL 3.6.5 and FreeRDP 3.33.0) from your local directory:
+On macOS, install both Rust targets for a universal build. Place the verified `openssl-3.6.5.tar.gz` and `freerdp-3.33.0.tar.xz` source archives in your local download directory before using offline mode. Set `EDGE_CA` to an existing deployment **public** CA file; the example path below must be replaced:
 
 ```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+export EDGE_CA="/absolute/path/to/deployment-public-ca.crt"
 export CALABI_RDP_DOWNLOAD_DIR="$HOME/Downloads"
 export CALABI_RDP_OFFLINE=1
-EDGE_CA="$PWD/calabi-edge-ca.pem" bash scripts/build-desktop.sh --target universal-apple-darwin
+bash scripts/build-desktop.sh --target universal-apple-darwin
 bash scripts/package-macos-pkg.sh --daemon bin/calabi
 ```
 
@@ -36,7 +42,7 @@ The native application displays its own version. The local browser console displ
 
 ## Release preparation
 
-Build from a clean public product checkout and the pinned core. Windows stages its installer in `dist/release-desktop`; carry the macOS package to the same release workspace and use `scripts/stage-release-installer.sh` to add it. Update manifests use the existing signing key and desktop channel; the two platforms must be combined before publishing.
+Build from a clean public product checkout and the pinned core. Windows stages its installer in `dist/release-desktop`; carry the macOS package to the same release workspace and use `scripts/stage-release-installer.sh` to add it. Update manifests use the existing signing key and desktop channel; the two platforms must be combined before publishing. Set `CALABI_DOWNLOAD_BASE=https://download.calabi.net/desktop` for the official channel, and pass `--platform darwin-universal` when staging the Mac package with the signing key configured. Installer URLs must use the same HTTPS host as the served update manifest. `latest.json` must contain both `windows-x86_64` and `darwin-universal` before the release preview can pass.
 
 ```sh
 python scripts/products/product.py manifest desktop
@@ -46,7 +52,9 @@ This records the product version, core version, complete source commits and inst
 
 ## Source and licensing
 
-Calabi source is licensed under Apache-2.0; see `LICENSE` and `NOTICE`. RDP and SSH dependencies have their own notices and pinned build recipes under the source directories. Preserve these notices in redistributions. Native codec availability and platform signing requirements must be verified for each distribution.
+Calabi source is licensed under Apache-2.0; see `LICENSE` and `NOTICE`. RDP and SSH dependencies have their own notices and pinned build recipes under the source directories. Preserve these notices in redistributions. Native codec availability and platform signing requirements must be verified for each distribution. Ed25519 release signatures do not replace Windows Authenticode or Apple Developer ID signing/notarization.
+
+Report security issues using the [Calabi security policy](https://github.com/calabinet/calabi/blob/main/SECURITY.md).
 
 
 ## Verify release provenance before publishing
@@ -54,7 +62,7 @@ Calabi source is licensed under Apache-2.0; see `LICENSE` and `NOTICE`. RDP and 
 From the prepared public build, sign the product manifest with the established release key (kept outside Git), then preview the release:
 
 ```powershell
-pwsh -NoProfile -File scripts/dev/build.ps1 go run ./scripts/updatekit sign-file --file dist/release-desktop/build-manifest.json --privkey <private-key-file> > dist/release-desktop/build-manifest.json.sig
+pwsh -NoProfile -File scripts/dev/build.ps1 go run ./scripts/updatekit sign-file --file dist/release-desktop/build-manifest.json --privkey "C:/release-keys/update-private.key" > dist/release-desktop/build-manifest.json.sig
 python scripts/products/publish-release.py desktop
 ```
 
@@ -66,7 +74,7 @@ The preview verifies the manifest signature, installer hashes, product version, 
 From the prepared build, create a source archive for another build machine:
 
 ```sh
-python scripts/products/product.py archive desktop --destination ../calabi-desktop-source.zip --edge-ca <public-ca.crt>
+python scripts/products/product.py archive desktop --destination ../calabi-desktop-source.zip --edge-ca "/absolute/path/to/public-ca.crt"
 ```
 
 The archive includes only recorded public source inputs, their provenance and the optional public CA. It works without a Git checkout and refuses development overrides, changed inputs or private keys. For a formal desktop release, build Windows and macOS from the same selected product source commit; validation installers are separate from release publication.

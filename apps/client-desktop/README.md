@@ -2,7 +2,7 @@
 
 A window and a tray icon for the `calabi` client, built with Tauri 2. The window
 shows the client's local console (`http://127.0.0.1:7400`) — the same page a
-browser shows. The app has no web code of its own.
+browser shows. The shared console is served by the daemon; native RDP, SSH/SFTP and remote-session workspaces are implemented in this desktop product.
 
 Released for Windows (a setup `.exe`) and macOS (a `.pkg`).
 
@@ -27,11 +27,11 @@ Released for Windows (a setup `.exe`) and macOS (a `.pkg`).
 
 ## Build
 
-Needs Rust (stable), Go 1.25+ and the Tauri 2 CLI
+Needs Python 3.12+, Git, Node.js 20+, Rust (stable), Go 1.25+ and the Tauri 2 CLI
 (`cargo install tauri-cli --version "^2"`), plus:
 
-- Windows: the MSVC build tools and the WebView2 runtime (included in Windows 11);
-- macOS: the Xcode command-line tools;
+- Windows: PowerShell 7, the MSVC build tools and WebView2; production RDP packaging also requires Python 3.14, MinGW-w64 UCRT GCC, CMake, Ninja and curl on PATH;
+- macOS: the Xcode command-line tools, CMake, pkg-config and Python 3 on PATH;
 - Linux: `webkit2gtk-4.1-dev`, `libssl-dev`, `libgtk-3-dev`, `librsvg2-dev`,
   `libayatana-appindicator3-dev`.
 
@@ -64,7 +64,7 @@ A debug build attaches to a running service, like a release build. When there
 is none, it starts a daemon itself, looking for `calabi` in this order:
 
 1. `CALABI_DAEMON_PATH` — set it for the current shell only
-   (`$env:CALABI_DAEMON_PATH = "$PWD\bin\calabi.exe"`); release builds ignore it;
+   (use the absolute path to `bin/calabi.exe` in the prepared build, not the current `src-tauri` directory); release builds ignore it;
 2. next to the app;
 3. `PATH`.
 
@@ -84,5 +84,8 @@ apps/client-desktop/
     ├── icons/
     └── src/
         ├── main.rs            # window, tray, single instance, start at login
-        └── daemon.rs          # finding and attaching to the service
+        ├── daemon.rs          # finding and attaching to the service
+        ├── remote_workspace.rs # shared native session workspace
+        ├── rdp_workspace.rs   # remote desktop sessions
+        └── ssh_sftp.rs        # SSH file sessions
 ```

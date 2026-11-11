@@ -1,4 +1,4 @@
-# Finder 远程文件菜单（assist.80 预览）
+# Finder 远程文件菜单
 
 Windows 中复制文件后，在 Mac 目标 Finder 文件夹的**空白处右键**，选择带 Calabi 图标的「粘贴远程文件」。这版入口不使用 ⌘V。
 
@@ -10,7 +10,7 @@ Windows 中复制文件后，在 Mac 目标 Finder 文件夹的**空白处右键
 
 单独构建 Finder 扩展：在源码根目录运行 `bash tools/rdp-finder-menu/build.sh /tmp/CalabiRemoteFiles.app --universal`。完整客户端还需要桌面应用和 RDP 助手。
 
-本机 Windows 不具备 macOS SDK，未验证 Mac 原生编译及真实 Finder 菜单。Mac 构建脚本将执行真实接收函数的 fixture，包括目录改名后仍写入固定目录、跨块内容、重名保留、取消和失败清理、空文件。通过 fixture 仍不替代真实菜单、权限、UI 和网络验收。
+Finder 集成的原生构建与菜单验收需要 macOS。Mac 构建脚本会执行真实接收函数的 fixture，包括目录改名后仍写入固定目录、跨块内容、重名保留、取消和失败清理、空文件。通过 fixture 仍不替代真实菜单、权限、UI 和网络验收。
 
 真机检查：
 
