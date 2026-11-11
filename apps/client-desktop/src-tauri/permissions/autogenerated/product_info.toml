@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-product-info"
+description = "Enables the product_info command without any pre-configured scope."
+commands.allow = ["product_info"]
+
+[[permission]]
+identifier = "deny-product-info"
+description = "Denies the product_info command without any pre-configured scope."
+commands.deny = ["product_info"]

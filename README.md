@@ -1,0 +1,57 @@
+# Calabi Desktop
+
+Native Calabi desktop application for Windows and macOS. The application bundles a tested Calabi daemon, remote desktop components and file transfer helpers.
+
+The product version is `apps/client-desktop/VERSION`. The shared core is maintained in [calabinet/calabi](https://github.com/calabinet/calabi); `apps/client-desktop/core-source.json` pins its version and complete public commit. Core source is fetched for builds, rather than maintained in this repository.
+
+## Build
+
+Install Python 3.12+, Git, Go 1.25+, Node.js 20+, Rust with the Tauri CLI, and the platform's native build tools. Windows needs MSVC and WebView2. macOS needs Xcode Command Line Tools and the native dependencies documented in the RDP helper source under `tools/rdp-p0`.
+
+```sh
+python scripts/products/product.py prepare desktop --destination ../calabi-desktop-build
+cd ../calabi-desktop-build
+```
+
+On Windows use PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File scripts/build-desktop.ps1
+```
+
+On macOS:
+
+```sh
+bash scripts/build-desktop.sh --target universal-apple-darwin
+bash scripts/package-macos-pkg.sh --app <path-to-Calabi.app> --daemon bin/calabi
+```
+
+Builds without a supplied deployment Edge CA are development builds. For a production build, pass the deployment's **public** CA through `-EdgeCa` (Windows) or `EDGE_CA` (macOS). Keep signing keys and passwords outside the source tree. Existing application identifiers, service paths and credential stores are preserved.
+
+The native application displays its own version. The local browser console displays the version of its actual running daemon. Settings list the product and core versions separately.
+
+## Release preparation
+
+Build from a clean public product checkout and the pinned core. Windows stages its installer in `dist/release-desktop`; carry the macOS package to the same release workspace and use `scripts/stage-release-installer.sh` to add it. Update manifests use the existing signing key and desktop channel; the two platforms must be combined before publishing.
+
+```sh
+python scripts/products/product.py manifest desktop
+```
+
+This records the product version, core version, complete source commits and installer hashes. Development `--core-tree` overrides are explicitly marked and refused for release metadata. Publishing tags, installers, signatures and update manifests is a separate release operation.
+
+## Source and licensing
+
+Calabi source is licensed under Apache-2.0; see `LICENSE` and `NOTICE`. RDP and SSH dependencies have their own notices and pinned build recipes under the source directories. Preserve these notices in redistributions. Native codec availability and platform signing requirements must be verified for each distribution.
+
+
+## Verify release provenance before publishing
+
+From the prepared public build, sign the product manifest with the established release key (kept outside Git), then preview the release:
+
+```powershell
+pwsh -NoProfile -File scripts/dev/build.ps1 go run ./scripts/updatekit sign-file --file dist/release-desktop/build-manifest.json --privkey <private-key-file> > dist/release-desktop/build-manifest.json.sig
+python scripts/products/publish-release.py desktop
+```
+
+The preview verifies the manifest signature, installer hashes, product version, fixed core and complete installer set. `--publish` additionally requires an existing public tag at the recorded product source commit. Release tags and publication are separate operations. Desktop update descriptors retain the established desktop signing key and channel.

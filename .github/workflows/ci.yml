@@ -1,0 +1,24 @@
+name: Product build
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python scripts/products/product.py check desktop
+      - run: python scripts/products/product.py prepare desktop --destination ../build-source
+      - run: pwsh -NoProfile -File ../build-source/scripts/dev/build.ps1 go -C ../build-source build -o apps/client-desktop/src-tauri/binaries/calabi.exe ./apps/client/cmd/calabi
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pwsh -NoProfile -File ../build-source/scripts/dev/build.ps1 cargo check --manifest-path ../build-source/apps/client-desktop/src-tauri/Cargo.toml

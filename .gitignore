@@ -1,0 +1,9 @@
+/dist/
+/bin/
+**/node_modules/
+**/target/
+**/build/
+**/.gradle/
+**/local.properties
+**/app/libs/*.aar
+**/__pycache__/
