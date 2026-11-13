@@ -2,7 +2,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -36,6 +36,7 @@ pub struct Bridge {
     selection: watch::Sender<Selection>,
     connected: Arc<AtomicBool>,
     input: mpsc::Sender<[u8; 8]>,
+    input_queued: Arc<AtomicU64>,
     viewport: watch::Sender<Option<[u8; 8]>>,
     frame: Arc<Mutex<Arc<Vec<u8>>>>,
     cursor: Arc<Mutex<Frame>>,
@@ -83,6 +84,13 @@ impl Bridge {
         let (updates, _) = watch::channel(());
         #[cfg(windows)]
         let notify_update = updates.clone();
+        let input_queued = Arc::new(AtomicU64::new(0));
+        let queued = input_queued.clone();
+        let written = Arc::new(AtomicU64::new(0));
+        let sent = written.clone();
+        let diagnostic_frame = frame.clone();
+        let diagnostic_selection = selection.subscribe();
+        log::info!("rdp_bridge diagnostic_start port={port}");
         tauri::async_runtime::spawn(async move {
             let mut stream = loop {
                 let stream = tokio::select! {
@@ -185,19 +193,39 @@ impl Bridge {
                             }
                             command = input_rx.recv() => {
                                 let Some(command) = command else { return Ok(()) };
-                                if value == Selection::Active { writer.write_all(&command).await?; }
+                                if value == Selection::Active {
+                                    writer.write_all(&command).await?;
+                                    sent.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                         }
                     }
                 }
             };
-            tokio::select! { _ = read_frames => {}, _ = write_controls => {} }
+            let monitor = async {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    let state = match *diagnostic_selection.borrow() {
+                        Selection::Active => "active", Selection::Inactive => "inactive", Selection::Closed => "closed",
+                    };
+                    log::info!("rdp_bridge heartbeat port={port} state={state} frame_revision={} input_queued={} input_written={}",
+                        frame_revision(&diagnostic_frame.lock().unwrap()),
+                        queued.load(Ordering::Relaxed),written.load(Ordering::Relaxed));
+                }
+            };
+            tokio::select! {
+                result = read_frames => { log::info!("rdp_bridge ended port={port} side=frames result={result:?}"); },
+                result = write_controls => { log::info!("rdp_bridge ended port={port} side=controls result={result:?}"); },
+                _ = monitor => {},
+            }
         });
         Ok(Arc::new(Self {
             directory,
             selection,
             connected,
             input,
+            input_queued,
             viewport,
             frame,
             cursor,
@@ -308,7 +336,9 @@ impl Bridge {
         }
         self.input
             .try_send(packet(kind, a, b, delta))
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        self.input_queued.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 

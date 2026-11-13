@@ -41,16 +41,67 @@ pub struct FileAgent {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-type RdpWindows = std::collections::HashMap<(String, String), tokio::sync::mpsc::Sender<()>>;
+type RdpFocus = tokio::sync::oneshot::Sender<bool>;
+#[cfg(any(windows, target_os = "macos"))]
+type RdpWindows = std::collections::HashMap<(String, String), tokio::sync::mpsc::Sender<RdpFocus>>;
+
+const FILE_AGENT_BUSY: &str = "Local file agent is busy; try again shortly";
+const FILE_AGENT_TIMEOUT: &str = "Local file agent response timed out; retry the operation";
+const RDP_FOCUS_TIMEOUT: &str = "Remote window is not responding; try again shortly";
+
+fn file_control_operation(operation: &str) -> bool {
+    matches!(operation, "snapshot" | "rdp_target" | "rdp_history" | "rdp_record" | "ssh_target" | "ssh_history" | "ssh_record")
+}
+
+// Enqueuing a focus message is not proof that a live window was shown. Confirm
+// it, or let the first click retire a stale session instead of silently doing nothing.
+#[cfg(any(windows, target_os = "macos"))]
+async fn request_rdp_focus(sender: &tokio::sync::mpsc::Sender<RdpFocus>, deadline: std::time::Duration) -> Result<bool,String> {
+    let (reply, received) = tokio::sync::oneshot::channel();
+    tokio::time::timeout(deadline, async {
+        if sender.send(reply).await.is_err() { return false; }
+        received.await.unwrap_or(false)
+    }).await.map_err(|_| RDP_FOCUS_TIMEOUT.to_owned())
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn retire_rdp_focus(receiver: &mut tokio::sync::mpsc::Receiver<RdpFocus>) {
+    // Cleanup may wait for a helper to exit. Stop accepting opens immediately,
+    // and acknowledge clicks already queued before doing that asynchronous work.
+    receiver.close();
+    while let Ok(reply) = receiver.try_recv() { let _ = reply.send(false); }
+}
+
+async fn exchange_file_rpc(guard: &mut Option<Rpc>, body: &[u8], deadline: Option<std::time::Duration>) -> Result<Value,String> {
+    // Ownership stays outside the shared slot while I/O is in flight. Timeout
+    // or cancellation drops the pipe so a late reply cannot answer the next call.
+    let mut rpc = guard.take().ok_or("File agent unavailable")?;
+    let exchange = async {
+        rpc.input.write_all(body).await.map_err(|e| e.to_string())?;
+        let mut line = String::new();
+        let read = (&mut rpc.output).take(4 * 1024 * 1024).read_line(&mut line).await.map_err(|e| e.to_string())?;
+        if read == 0 { return Err("File agent stopped; reopen transfers to retry".to_owned()); }
+        if !line.ends_with('\n') { return Err("File agent response too large".to_owned()); }
+        serde_json::from_str(&line).map_err(|e| e.to_string())
+    };
+    let result = match deadline {
+        Some(limit) => tokio::time::timeout(limit, exchange).await.map_err(|_| FILE_AGENT_TIMEOUT.to_owned())?,
+        None => exchange.await,
+    };
+    if result.is_ok() { *guard = Some(rpc); }
+    result
+}
 
 #[cfg(windows)]
-pub(crate) fn focus_rdp_window(pid: u32) {
+pub(crate) fn focus_rdp_window(pid: u32) -> bool {
     use windows_sys::Win32::{Foundation::{HWND, LPARAM}, UI::WindowsAndMessaging::*};
 
-    unsafe extern "system" fn focus(hwnd: HWND, pid: LPARAM) -> i32 {
+    struct Probe { pid:u32, found:bool }
+    unsafe extern "system" fn focus(hwnd: HWND, pointer: LPARAM) -> i32 {
+        let probe = &mut *(pointer as *mut Probe);
         let mut owner = 0;
         GetWindowThreadProcessId(hwnd, &mut owner);
-        if owner != pid as u32 || IsWindowVisible(hwnd) == 0 { return 1; }
+        if owner != probe.pid || IsWindowVisible(hwnd) == 0 { return 1; }
         let mut class = [0; 32];
         let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
         if len <= 0 || !matches!(String::from_utf16_lossy(&class[..len as usize]).as_str(), "CalabiRdpSession" | "#32770") {
@@ -58,17 +109,20 @@ pub(crate) fn focus_rdp_window(pid: u32) {
         }
         if IsIconic(hwnd) != 0 { ShowWindowAsync(hwnd, SW_RESTORE); }
         SetForegroundWindow(hwnd);
+        probe.found = true;
         0
     }
 
-    unsafe { EnumWindows(Some(focus), pid as LPARAM); }
+    let mut probe = Probe {pid,found:false};
+    unsafe { EnumWindows(Some(focus), &mut probe as *mut Probe as LPARAM); }
+    probe.found
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn focus_rdp_window(pid: u32) {
+pub(crate) fn focus_rdp_window(pid: u32) -> bool {
     extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
     const SIGUSR1: i32 = 30; // Darwin; the helper explicitly advertises support.
-    unsafe { kill(pid as i32, SIGUSR1); }
+    unsafe { kill(pid as i32, SIGUSR1) == 0 }
 }
 
 pub fn supported() -> bool { cfg!(any(windows, target_os = "macos")) }
@@ -83,9 +137,15 @@ fn file_call_error(result: &Result<Value, String>) -> Option<&str> {
 impl FileAgent {
     pub async fn call(&self, action: Value) -> Result<Value, String> {
         let operation: String = action["action"].as_str().unwrap_or("unknown").chars().take(40).collect();
-        let mut guard = self.rpc.lock().await;
-        let result = self.call_locked(&mut guard, action).await;
-        drop(guard);
+        let result = if file_control_operation(&operation) {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), self.rpc.lock()).await {
+                Ok(mut guard) => self.call_locked(&mut guard, action).await,
+                Err(_) => Err(FILE_AGENT_BUSY.to_owned()),
+            }
+        } else {
+            let mut guard = self.rpc.lock().await;
+            self.call_locked(&mut guard, action).await
+        };
         if let Some(error) = file_call_error(&result) {
             self.record_error(&operation, error);
         }
@@ -120,16 +180,13 @@ impl FileAgent {
         if body.len() > 8192 { return Err("File action too large".into()); }
         body.push(b'\n');
 
-        // Drop the connection if the exchange is cancelled so its response
-        // cannot be read as the response to the next request.
-        let mut rpc = guard.take().unwrap();
-        rpc.input.write_all(&body).await.map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        let read = (&mut rpc.output).take(4 * 1024 * 1024).read_line(&mut line).await.map_err(|e| e.to_string())?;
-        if read == 0 { return Err("File agent stopped; reopen transfers to retry".into()); }
-        if !line.ends_with('\n') { return Err("File agent response too large".into()); }
-        *guard = Some(rpc);
-        serde_json::from_str(&line).map_err(|e| e.to_string())
+        let operation = action["action"].as_str().unwrap_or("");
+        let deadline = if file_control_operation(operation) {
+            Some(std::time::Duration::from_secs(15))
+        } else if operation == "mesh_copy_rpc" {
+            Some(std::time::Duration::from_secs(45))
+        } else { None }; // Native pick/save dialogs must remain user-controlled.
+        exchange_file_rpc(guard, &body, deadline).await
     }
 
     async fn connect(&self, _supervisor: &Supervisor, console: String) -> Result<Rpc, String> {
@@ -451,8 +508,10 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
     if action["action"] == "rdp_record" { return Err("Remote login records require a native session".into()); }
     #[cfg(any(windows, target_os = "macos"))]
     if action["action"] == "rdp_open" {
+        log::info!("rdp_open requested");
         let key = action["peer"].as_str().ok_or("Missing RDP device")?;
         let result = agent.call(json!({"action":"rdp_target","peer":key})).await?;
+        log::info!("rdp_open target lookup completed");
         if let Some(error) = result["error"].as_str() { return Err(error.into()); }
         let host = result["host"].as_str().ok_or("RDP device unavailable")?;
         let local = result["local"].as_str().ok_or("Local mesh address unavailable")?;
@@ -461,10 +520,14 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
         let window_key = (profile.clone(), key.to_owned());
         let mut windows = agent.rdp_windows.lock().await;
         if let Some(existing) = windows.get(&window_key) {
-            use tokio::sync::mpsc::error::TrySendError;
-            if matches!(existing.try_send(()), Ok(()) | Err(TrySendError::Full(()))) {
+            let focused = request_rdp_focus(existing, std::time::Duration::from_secs(2)).await
+                .inspect_err(|error| agent.record_error("rdp_focus", error))?;
+            if focused {
+                log::info!("rdp_open existing window confirmed");
                 return Ok(json!({}));
             }
+            log::info!("rdp_open stale window retired");
+            windows.remove(&window_key);
         }
         let name: String = action["name"].as_str().unwrap_or("").chars().take(120).collect();
         let history = agent.call(json!({"action":"rdp_history","rdp_profile":profile})).await.unwrap_or(Value::Null);
@@ -493,6 +556,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             if std::fs::create_dir_all(&logs).is_ok() {
                 command.env("CALABI_RDP_CLIP_LOG",logs.join(format!("rdp-clipboard-{host}.log")));
                 command.env("CALABI_RDP_GFX_LOG",logs.join(format!("rdp-display-{host}.log")));
+                command.env("CALABI_RDP_DIAG_LOG",logs.join(format!("rdp-session-{host}-{session_id}.log")));
             }
         }
         let mut child = command.env("CALABI_P0_PEER",host).env("CALABI_RDP_LOCAL",local)
@@ -504,6 +568,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn().map_err(|e|format!("Cannot open Calabi RDP window: {e}"))?;
+        log::info!("rdp_open helper launched pid={:?}", child.id());
         let mut input = child.stdin.take().ok_or("Missing RDP input pipe")?;
         let output = child.stdout.take().ok_or("Missing RDP output pipe")?;
         let mut lines = BufReader::new(output).lines();
@@ -511,6 +576,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
         {
             let ready = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line()).await;
             if !matches!(ready, Ok(Ok(Some(ref line))) if line == "rdp-login-ready") {
+                log::warn!("rdp_open login helper did not become ready");
                 return Err("Cannot prepare Calabi RDP login window".into());
             }
             if let Some(pid) = child.id() {
@@ -519,6 +585,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             if input.write_all(b"rdp-login-show\n").await.is_err() {
                 return Err("Cannot show Calabi RDP login window".into());
             }
+            log::info!("rdp_open login window requested");
         }
         let (focus, mut focus_requests) = tokio::sync::mpsc::channel(1);
         let focus_key = focus.downgrade();
@@ -545,30 +612,41 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             loop {
                 let line=tokio::select! {
                     result=lines.next_line()=>match result {Ok(Some(line))=>line,_=>break},
-                    _=selection.changed()=>{
+                    result=selection.changed()=>{
+                        if result.is_err() || *selection.borrow_and_update() == crate::rdp_workspace::Selection::Closed { break; }
                         copy_retry_at = tokio::time::Instant::now();
                         copy_tick.reset_immediately();
                         continue;
                     }
                     request=focus_requests.recv()=>{
-                        if request.is_none() || !matches!(child.try_wait(), Ok(None)) { break; }
+                        let Some(reply) = request else { break; };
+                        if !matches!(child.try_wait(), Ok(None)) { let _=reply.send(false);break; }
                         if workspace_connected {
                             if let Some(remote) = window.app_handle().get_webview_window(crate::remote_workspace::LABEL) {
                                 if crate::remote_workspace::select(&remote, &session_id).is_ok() {
-                                    let _ = remote.show();
-                                    let _ = remote.unminimize();
+                                    let shown = remote.show().is_ok() && remote.unminimize().is_ok();
                                     let _ = remote.set_focus();
+                                    let _ = reply.send(shown);
+                                    continue;
                                 }
                             }
-                            continue;
+                            let _=reply.send(false);
+                            break;
                         }
                         #[cfg(windows)]
-                        if let Some(pid) = child.id() { focus_rdp_window(pid); }
+                        {
+                            let shown=child.id().is_some_and(focus_rdp_window);
+                            let _=reply.send(shown);
+                            if !shown { break; }
+                        }
                         #[cfg(target_os = "macos")]
                         if focus_ready {
-                            if let Some(pid) = child.id() { focus_rdp_window(pid); }
+                            let shown=child.id().is_some_and(focus_rdp_window);
+                            let _=reply.send(shown);
+                            if !shown { break; }
                         } else {
                             focus_pending = true;
+                            let _=reply.send(true);
                         }
                         continue;
                     }
@@ -719,6 +797,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                 if pin.is_empty() { agent.record_error("rdp_verify","No matching authenticated RDP listener certificate for this device"); }
                 if input.write_all(format!("{pin}\n").as_bytes()).await.is_err(){break;}
             }
+            retire_rdp_focus(&mut focus_requests);
             #[cfg(windows)]
             if let Some(job)=clipboard_job.take(){let _=agent.call(json!({"action":"cancel","id":job})).await;}
             drop(input);
@@ -835,6 +914,72 @@ fn open_requests(app: &tauri::AppHandle) {
 mod diagnostic_tests {
     use super::file_call_error;
     use serde_json::json;
+
+    fn rpc_fixture() -> (super::Rpc, tokio::io::DuplexStream) {
+        let (client, server) = tokio::io::duplex(128);
+        let (read, write) = tokio::io::split(client);
+        (super::Rpc::new("fixture".into(),None,write,read), server)
+    }
+
+    #[tokio::test]
+    async fn rpc_timeout_discards_late_reply_and_next_connection_can_recover() {
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        let (rpc,mut old_peer)=rpc_fixture();let mut guard=Some(rpc);
+        let result=super::exchange_file_rpc(&mut guard,b"old\n",Some(std::time::Duration::from_millis(20))).await;
+        assert_eq!(result.unwrap_err(),super::FILE_AGENT_TIMEOUT);assert!(guard.is_none());
+        let mut request=[0;4];old_peer.read_exact(&mut request).await.unwrap();assert_eq!(&request,b"old\n");
+        assert!(old_peer.write_all(b"{\"source\":\"stale\"}\n").await.is_err());
+        let (fresh,mut peer)=rpc_fixture();guard=Some(fresh);
+        let responder=tokio::spawn(async move {let mut request=[0;4];peer.read_exact(&mut request).await.unwrap();assert_eq!(&request,b"new\n");peer.write_all(b"{\"source\":\"fresh\"}\n").await.unwrap();});
+        assert_eq!(super::exchange_file_rpc(&mut guard,b"new\n",Some(std::time::Duration::from_secs(1))).await.unwrap(),json!({"source":"fresh"}));
+        responder.await.unwrap();assert!(guard.is_some());
+    }
+
+    #[tokio::test]
+    async fn rpc_partial_reply_is_bounded_but_user_dialog_has_no_exchange_deadline() {
+        use tokio::io::AsyncWriteExt;
+        let (rpc,mut peer)=rpc_fixture();let mut guard=Some(rpc);
+        peer.write_all(b"{\"ok\":true}").await.unwrap();
+        assert_eq!(super::exchange_file_rpc(&mut guard,b"read\n",Some(std::time::Duration::from_millis(20))).await.unwrap_err(),super::FILE_AGENT_TIMEOUT);
+        assert!(guard.is_none());
+        let (rpc,mut peer)=rpc_fixture();guard=Some(rpc);
+        let responder=tokio::spawn(async move {tokio::time::sleep(std::time::Duration::from_millis(40)).await;peer.write_all(b"{\"picked\":true}\n").await.unwrap();});
+        assert_eq!(super::exchange_file_rpc(&mut guard,b"pick\n",None).await.unwrap(),json!({"picked":true}));responder.await.unwrap();
+    }
+
+    #[cfg(any(windows,target_os="macos"))]
+    #[tokio::test]
+    async fn rdp_focus_requires_acknowledgement_and_handles_stale_or_stalled_sessions() {
+        for shown in [true,false] {
+            let (sender,mut receiver)=tokio::sync::mpsc::channel::<super::RdpFocus>(1);
+            let responder=tokio::spawn(async move {receiver.recv().await.unwrap().send(shown).unwrap();});
+            assert_eq!(super::request_rdp_focus(&sender,std::time::Duration::from_secs(1)).await.unwrap(),shown);responder.await.unwrap();
+        }
+        let (sender,receiver)=tokio::sync::mpsc::channel::<super::RdpFocus>(1);drop(receiver);
+        assert!(!super::request_rdp_focus(&sender,std::time::Duration::from_secs(1)).await.unwrap());
+        let (sender,_receiver)=tokio::sync::mpsc::channel::<super::RdpFocus>(1);
+        assert_eq!(super::request_rdp_focus(&sender,std::time::Duration::from_millis(20)).await.unwrap_err(),super::RDP_FOCUS_TIMEOUT);
+    }
+
+    #[cfg(any(windows,target_os="macos"))]
+    #[tokio::test]
+    async fn closing_rdp_session_rejects_queued_and_new_clicks_before_helper_cleanup() {
+        let (sender,mut receiver)=tokio::sync::mpsc::channel::<super::RdpFocus>(1);
+        let (reply,received)=tokio::sync::oneshot::channel();sender.send(reply).await.unwrap();
+        super::retire_rdp_focus(&mut receiver);
+        assert!(!received.await.unwrap());
+        assert!(!super::request_rdp_focus(&sender,std::time::Duration::from_secs(1)).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn waiting_for_an_active_file_dialog_returns_busy_without_cancelling_it() {
+        let agent=super::FileAgent {rpc:tokio::sync::Mutex::new(None),supervisor:None,native_locale_path:None,
+            diagnostics:std::sync::Mutex::new(Default::default()),receipts:std::sync::Mutex::new(Default::default()),
+            #[cfg(any(windows,target_os="macos"))]rdp_windows:tokio::sync::Mutex::new(Default::default())};
+        let held=agent.rpc.lock().await;
+        assert_eq!(agent.call(json!({"action":"rdp_target"})).await.unwrap_err(),super::FILE_AGENT_BUSY);
+        drop(held);assert!(agent.rpc.try_lock().is_ok());
+    }
 
     #[test]
     fn rdp_pin_requires_current_scope_addresses_and_exact_sha256() {

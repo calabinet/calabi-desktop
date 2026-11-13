@@ -381,6 +381,7 @@ pub fn active(window: &WebviewWindow, id: &str) -> bool {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     Snapshot,
+    Minimize,
     Select {
         id: String,
     },
@@ -445,6 +446,7 @@ pub async fn remote_workspace(
                 "nativeRdp": state.native_rdp(),
                 "rdpCompare": true,
                 "frameWait": cfg!(windows),
+                "canMinimize": cfg!(windows),
                 "sessions": state.sessions.iter().map(|entry| json!({
                     "id":entry.id, "name":entry.name, "protocol": if entry.rdp.is_some() { "rdp" } else { "ssh" }
                 })).collect::<Vec<_>>(),
@@ -462,6 +464,10 @@ pub async fn remote_workspace(
             window
                 .set_fullscreen(enabled)
                 .map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
+        Request::Minimize => {
+            window.minimize().map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
         Request::Close { id } => {

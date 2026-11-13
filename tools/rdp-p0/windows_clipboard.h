@@ -19,6 +19,7 @@ int probe_clipboard_read(uint8_t **text, size_t *length, uint32_t *format, uint6
     if(selected!=selection){selection=selected;*sequence=current;return 3;}
 #endif
     if (current == *sequence && !getenv("CALABI_RDP_FILE_BRIDGE")) return 1;
+    const uint64_t beforeRead=*sequence;
     if (!OpenClipboard(NULL)) return 0;
     if(getenv("CALABI_RDP_FILE_MESH") && IsClipboardFormatAvailable(CF_HDROP)){
         *sequence=GetClipboardSequenceNumber();CloseClipboard();return 3;
@@ -41,13 +42,20 @@ int probe_clipboard_read(uint8_t **text, size_t *length, uint32_t *format, uint6
         }
         CloseClipboard();return 1;
     }
-    if (!IsClipboardFormatAvailable(CF_HDROP) && IsClipboardFormatAvailable(CF_DIB)) {
-        HANDLE h=GetClipboardData(CF_DIB); SIZE_T n=h?GlobalSize(h):0;
-        const BYTE *p=h?GlobalLock(h):NULL;
-        if(p && clip_valid_dib(p,n)) {
-            *text=malloc(n);if(*text){memcpy(*text,p,n);*length=n;*format=PROBE_FORMAT_DIB;}
+    if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5)) {
+        const UINT formats[]={CF_DIB,CF_DIBV5};
+        BOOL retry=FALSE;
+        for(unsigned i=0;i<2 && !*text;i++){
+            if(!IsClipboardFormatAvailable(formats[i]))continue;
+            HANDLE h=GetClipboardData(formats[i]);SIZE_T n=h?GlobalSize(h):0;
+            const BYTE *p=h?GlobalLock(h):NULL;
+            if(!h || (n && !p))retry=TRUE;
+            if(p)*text=clip_normalize_dib(p,n,length);
+            if(p)GlobalUnlock(h);
         }
-        if(p)GlobalUnlock(h);CloseClipboard();return 1;
+        if(*text)*format=PROBE_FORMAT_DIB;
+        if(!*text && retry){*sequence=beforeRead;CloseClipboard();return 0;}
+        CloseClipboard();return 1;
     }
     BOOL hasText = !IsClipboardFormatAvailable(CF_HDROP) && IsClipboardFormatAvailable(CF_UNICODETEXT);
     HANDLE data = hasText ? GetClipboardData(CF_UNICODETEXT) : NULL;

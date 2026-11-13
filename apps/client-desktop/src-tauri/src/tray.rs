@@ -13,7 +13,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
 
-const PANEL_HEIGHT: f64 = 375.0;
+// Default size; the page requests a taller panel when system text is enlarged.
+const PANEL_WIDTH: f64 = 276.0;
+const PANEL_HEIGHT: f64 = 336.0;
 
 struct Items {
     mesh_change: tokio::sync::Mutex<()>,
@@ -87,12 +89,36 @@ pub fn tray_action(
     window: tauri::WebviewWindow,
     app: AppHandle,
     action: String,
+    height: Option<f64>,
+    viewport_height: Option<f64>,
 ) -> Result<Value, String> {
     if window.label() != "tray-panel" {
         return Err("tray window required".into());
     }
     if action == "snapshot" {
         return Ok(localized_snapshot(&app));
+    }
+    if action == "resize" {
+        let requested = height.filter(|h| h.is_finite()).ok_or("invalid tray height")?;
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        let old = window.inner_size().map_err(|e| e.to_string())?;
+        let viewport = viewport_height.filter(|h| h.is_finite() && *h > 0.0)
+            .ok_or("invalid tray viewport height")?;
+        // WebView2's text/zoom scale can differ from the monitor DPI. Convert
+        // CSS pixels through the actual client/viewport ratio, not DPI alone.
+        let requested = requested * old.height as f64 / viewport / scale;
+        let position = window.outer_position().map_err(|e| e.to_string())?;
+        let monitor = window.current_monitor().map_err(|e| e.to_string())?;
+        let maximum = monitor.as_ref().map(|m| m.work_area().size.height as f64 / scale - 16.0).unwrap_or(900.0);
+        let height = requested.ceil().clamp(PANEL_HEIGHT.min(maximum), maximum.min(900.0));
+        window.set_size(tauri::LogicalSize::new(PANEL_WIDTH, height)).map_err(|e| e.to_string())?;
+        if window.is_visible().unwrap_or(false) {
+            let top = monitor.as_ref().map(|m| m.work_area().position.y).unwrap_or(position.y);
+            // Keep the bottom anchored above the tray while a label/locale changes.
+            let y = (position.y + old.height as i32 - (height * scale).round() as i32).max(top);
+            window.set_position(tauri::PhysicalPosition::new(position.x, y)).map_err(|e| e.to_string())?;
+        }
+        return Ok(Value::Null);
     }
     if action == "hide" {
         let _ = window.hide();
@@ -152,9 +178,12 @@ pub fn build(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         tauri::WebviewUrl::App("tray.html".into()),
     )
     .title(tr(app, "托盘菜单"))
-    .inner_size(288.0, PANEL_HEIGHT)
+    .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
     .decorations(false)
     .shadow(false)
+    .transparent(true)
+    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .theme(Some(tauri::Theme::Light))
     .resizable(false)
     .skip_taskbar(true)
     .always_on_top(true)
@@ -211,8 +240,10 @@ pub fn build(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(monitor) = monitor {
                         let area = monitor.work_area();
                         let scale = monitor.scale_factor();
-                        let width = 288.0 * scale;
-                        let height = PANEL_HEIGHT * scale;
+                        let width = PANEL_WIDTH * scale;
+                        let height = window.inner_size().ok()
+                            .and_then(|size| window.scale_factor().ok().map(|s| size.height as f64 / s * scale))
+                            .unwrap_or(PANEL_HEIGHT * scale);
                         let left = area.position.x as f64;
                         let top = area.position.y as f64;
                         let x = (position.x - width)

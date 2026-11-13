@@ -6,5 +6,5 @@
   "remote": {
     "urls": ["http://127.0.0.1:*"]
   },
-  "permissions": ["shell:default", "allow-tray-set-locale", "allow-product-info"]
+  "permissions": ["shell:default", "allow-tray-set-locale", "allow-desktop-set-theme", "allow-product-info"]
 }

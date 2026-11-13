@@ -130,6 +130,23 @@ static void layout_login_fields(HWND dlg) {
     }
 }
 
+static void layout_login_buttons(HWND dlg) {
+    HDC dc=GetDC(dlg);if(!dc)return;
+    HGDIOBJ font=SelectObject(dc,(HFONT)SendDlgItemMessageW(dlg,IDOK,WM_GETFONT,0,0));
+    UINT dpi=GetDpiForWindow(dlg);
+    int primary=MulDiv(108,dpi,96),cancel=MulDiv(68,dpi,96),padding=MulDiv(24,dpi,96);
+    const RdpMessage messages[]={Rdp_Connect,Rdp_Connecting,Rdp_Cancel};
+    for(unsigned i=0;i<ARRAYSIZE(messages);i++){
+        RECT size={0};DrawTextW(dc,rdp_text(messages[i]),-1,&size,DT_CALCRECT|DT_SINGLELINE|DT_NOPREFIX);
+        if(i==2)cancel=max(cancel,size.right+padding);else primary=max(primary,size.right+padding);
+    }
+    SelectObject(dc,font);ReleaseDC(dlg,dc);
+    RECT r;GetWindowRect(GetDlgItem(dlg,IDOK),&r);MapWindowPoints(NULL,dlg,(POINT*)&r,2);
+    int x=r.right-primary,gap=MulDiv(8,dpi,96);
+    SetWindowPos(GetDlgItem(dlg,IDOK),NULL,x,r.top,primary,r.bottom-r.top,SWP_NOZORDER|SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(dlg,IDCANCEL),NULL,x-gap-cancel,r.top,cancel,r.bottom-r.top,SWP_NOZORDER|SWP_NOACTIVATE);
+}
+
 static void shift_login_footer(HWND dlg,int units) {
     RECT offset={0,0,0,units};MapDialogRect(dlg,&offset);
     const int ids[]={IDC_FILES,IDC_REMEMBER,IDC_FORGET,IDCANCEL,IDOK};
@@ -404,7 +421,7 @@ static DWORD WINAPI connectWorker(void *arg) {
     PostMessageW(window,MSG_DONE,(WPARAM)(unsigned)rc,0);return 0;
 }
 // Credentials stay in the native helper; the parent only receives certificate queries.
-static const COLORREF panel=RGB(32,36,44), field=RGB(42,48,58), accent=RGB(220,227,255);
+static const COLORREF panel=RGB(245,248,252), field=RGB(255,255,255), accent=RGB(66,107,180);
 static HBRUSH panelBrush,fieldBrush;
 static HFONT headingFont;
 
@@ -416,29 +433,77 @@ static void rounded_box(HDC dc,RECT r,COLORREF fill,COLORREF edge,int radius){
     SelectObject(dc,oldBrush);SelectObject(dc,oldPen);
 }
 
-// RoundRect uses a binary edge. Blend the two end caps against the actual
-// dialog background at the button's current device-pixel size.
-static void draw_pill(HDC dc, RECT r, COLORREF fill) {
-    const int w = r.right - r.left, h = r.bottom - r.top;
-    if (w <= 0 || h <= 0) return;
-    DWORD *bitmap = malloc((size_t)w * h * sizeof(*bitmap));
-    if (!bitmap) { rounded_box(dc, r, fill, fill, h); return; }
-    const double radius = min(w, h) * 0.5;
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            double dx = fmax(0, fabs(x + 0.5 - w * 0.5) - (w * 0.5 - radius));
-            double dy = fmax(0, fabs(y + 0.5 - h * 0.5) - (h * 0.5 - radius));
-            double mix = fmin(1, fmax(0, radius + 0.5 - sqrt(dx*dx + dy*dy)));
-            DWORD red = (DWORD)(GetRValue(panel) + mix * (GetRValue(fill) - GetRValue(panel)) + 0.5);
-            DWORD green = (DWORD)(GetGValue(panel) + mix * (GetGValue(fill) - GetGValue(panel)) + 0.5);
-            DWORD blue = (DWORD)(GetBValue(panel) + mix * (GetBValue(fill) - GetBValue(panel)) + 0.5);
-            bitmap[(size_t)y*w + x] = (red << 16) | (green << 8) | blue;
-        }
+static void login_gradient(HDC dc,RECT rect,COLORREF start,COLORREF end) {
+    int w=rect.right-rect.left,h=rect.bottom-rect.top;
+    if(w<=0 || h<=0)return;
+    DWORD *pixels=malloc((size_t)w*h*sizeof(*pixels));
+    if(!pixels){SetDCBrushColor(dc,start);FillRect(dc,&rect,GetStockObject(DC_BRUSH));return;}
+    for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+        double t=0.65*(double)x/max(1,w-1)+0.35*(double)y/max(1,h-1);
+        DWORD r=GetRValue(start)+t*((int)GetRValue(end)-GetRValue(start));
+        DWORD g=GetGValue(start)+t*((int)GetGValue(end)-GetGValue(start));
+        DWORD b=GetBValue(start)+t*((int)GetBValue(end)-GetBValue(start));
+        pixels[(size_t)y*w+x]=(r<<16)|(g<<8)|b;
     }
-    BITMAPINFO info = {0};
-    info.bmiHeader = (BITMAPINFOHEADER){sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
-    SetDIBitsToDevice(dc, r.left, r.top, w, h, 0, 0, 0, h, bitmap, &info, DIB_RGB_COLORS);
-    free(bitmap);
+    BITMAPINFO info={0};
+    info.bmiHeader=(BITMAPINFOHEADER){sizeof(BITMAPINFOHEADER),w,-h,1,32,BI_RGB};
+    SetDIBitsToDevice(dc,rect.left,rect.top,w,h,0,0,0,h,pixels,&info,DIB_RGB_COLORS);
+    free(pixels);
+}
+
+#include "windows_login_frame.h"
+
+static void round_login_window(HWND dlg) {
+    RECT r;GetWindowRect(dlg,&r);
+    int diameter=MulDiv(36,GetDpiForWindow(dlg),96);
+    // Keep the hard native region inside the opaque part of the alpha rim.
+    // Its staircase is covered by the matching backplate fill, away from the
+    // outer silhouette where fractional alpha provides the smooth contour.
+    int inset=max(2,MulDiv(2,GetDpiForWindow(dlg),96));
+    HRGN region=CreateRoundRectRgn(inset,inset,r.right-r.left-inset,r.bottom-r.top-inset,
+                                 diameter-inset*2,diameter-inset*2);
+    HRGN current=CreateRectRgn(0,0,0,0);
+    BOOL same=current && GetWindowRgn(dlg,current)!=ERROR && region && EqualRgn(current,region);
+    if(current)DeleteObject(current);
+    if(same){DeleteObject(region);return;}
+    if(region && !SetWindowRgn(dlg,region,TRUE))DeleteObject(region);
+}
+
+static void paint_login_surface(HDC dc,HWND dlg) {
+    RECT body;GetClientRect(dlg,&body);
+    RECT header={0,0,236,57}, card={14,60,222,125};
+    MapDialogRect(dlg,&header);MapDialogRect(dlg,&card);
+    header.right=body.right;
+    login_gradient(dc,body,RGB(248,251,255),RGB(240,245,251));
+    login_gradient(dc,header,RGB(34,60,91),RGB(23,40,62));
+    int dpi=GetDpiForWindow(dlg),radius=MulDiv(18,dpi,96);
+    rounded_box(dc,card,field,RGB(226,232,240),radius);
+    const int ids[]={IDC_ACCOUNT,IDC_PASSWORD,IDC_PORT};
+    for(unsigned i=0;i<ARRAYSIZE(ids);i++){
+        RECT r;GetWindowRect(GetDlgItem(dlg,ids[i]),&r);MapWindowPoints(NULL,dlg,(POINT*)&r,2);
+        InflateRect(&r,MulDiv(4,dpi,96),MulDiv(3,dpi,96));
+        rounded_box(dc,r,field,GetFocus()==GetDlgItem(dlg,ids[i])?RGB(115,149,207):RGB(220,228,239),MulDiv(12,dpi,96));
+    }
+    RECT icon={14,26,36,48},screen={19,31,31,39},stand={22,41,28,42};
+    MapDialogRect(dlg,&icon);MapDialogRect(dlg,&screen);MapDialogRect(dlg,&stand);
+    rounded_box(dc,icon,RGB(38,63,91),RGB(69,92,119),MulDiv(14,dpi,96));
+    rounded_box(dc,screen,RGB(38,63,91),RGB(211,231,255),MulDiv(3,dpi,96));
+    SetDCBrushColor(dc,RGB(211,231,255));FillRect(dc,&stand,GetStockObject(DC_BRUSH));
+}
+
+// Child controls paint the same gradient at their own origin, avoiding solid
+// rectangles behind header labels, checkbox text and rounded button corners.
+static void paint_login_parent(HDC dc,HWND dlg,HWND child) {
+    POINT origin={0};MapWindowPoints(child,dlg,&origin,1);
+    // Static controls may share their parent's DC (CS_PARENTDC). Without an
+    // explicit child clip the last repaint can erase every sibling's text.
+    // Preserve the incoming viewport, including WM_PRINT's child translation.
+    RECT bounds;GetClientRect(child,&bounds);
+    int saved=SaveDC(dc);
+    if(!saved)return;
+    IntersectClipRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom);
+    OffsetViewportOrgEx(dc,-origin.x,-origin.y,NULL);
+    paint_login_surface(dc,dlg);RestoreDC(dc,saved);
 }
 
 static BOOL read_credentials(HWND dlg){
@@ -555,6 +620,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
         };
         for(size_t i=0;i<ARRAYSIZE(labels);i++)SetDlgItemTextW(dlg,labels[i].control,rdp_text_in(locale,labels[i].message));
         layout_login_fields(dlg);
+        layout_login_buttons(dlg);
         CheckDlgButton(dlg,IDC_FILES,BST_CHECKED);
         wchar_t name[256];
         const wchar_t *target=(const wchar_t *)lp;
@@ -587,11 +653,13 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
         login_refresh_password_hint(dlg);
         LOGFONTW font={0};
         if(GetObjectW((HFONT)SendDlgItemMessageW(dlg,IDC_DEVICE,WM_GETFONT,0,0),sizeof(font),&font)){
-            font.lfHeight=MulDiv(font.lfHeight,16,9);font.lfWeight=FW_SEMIBOLD;
+            font.lfHeight=MulDiv(font.lfHeight,15,9);font.lfWeight=FW_MEDIUM;
             headingFont=CreateFontIndirectW(&font);
             if(headingFont)SendDlgItemMessageW(dlg,IDC_DEVICE,WM_SETFONT,(WPARAM)headingFont,TRUE);
         }
         BOOL dark=TRUE;DwmSetWindowAttribute(dlg,20,&dark,sizeof(dark));
+        round_login_window(dlg);
+        login_frame_attach(dlg);
         SendMessageW(dlg,WM_SETICON,ICON_SMALL,(LPARAM)LoadIconW(GetModuleHandleW(NULL),MAKEINTRESOURCEW(IDI_CALABI)));
         SendMessageW(dlg,DM_SETDEFID,IDOK,0);
         SetFocus(GetDlgItem(dlg,IDC_ACCOUNT));return FALSE;
@@ -612,18 +680,18 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
         if((draw->hdr.idFrom==IDC_FILES || draw->hdr.idFrom==IDC_REMEMBER) &&
            draw->hdr.code==NM_CUSTOMDRAW && draw->dwDrawStage==CDDS_PREPAINT) {
             HDC dc=draw->hdc;RECT r=draw->rc;
-            FillRect(dc,&r,panelBrush);
+            paint_login_parent(dc,dlg,draw->hdr.hwndFrom);
             HFONT font=(HFONT)SendMessageW(draw->hdr.hwndFrom,WM_GETFONT,0,0);
             HGDIOBJ old=SelectObject(dc,font);TEXTMETRICW tm;GetTextMetricsW(dc,&tm);
             int size=max(12,tm.tmHeight-2),top=r.top+(r.bottom-r.top-size)/2;
             RECT box={r.left,top,r.left+size,top+size};
             BOOL checked=SendMessageW(draw->hdr.hwndFrom,BM_GETCHECK,0,0)==BST_CHECKED;
             rounded_box(dc,box,checked?accent:field,RGB(154,172,201),3);
-            if(checked){HPEN pen=CreatePen(PS_SOLID,max(1,size/8),RGB(37,53,101));HGDIOBJ prev=SelectObject(dc,pen);
+            if(checked){HPEN pen=CreatePen(PS_SOLID,max(1,size/8),RGB(255,255,255));HGDIOBJ prev=SelectObject(dc,pen);
                 MoveToEx(dc,box.left+size/4,top+size/2,NULL);LineTo(dc,box.left+size*2/5,top+size*3/4);
                 LineTo(dc,box.left+size*4/5,top+size/4);SelectObject(dc,prev);DeleteObject(pen);}
             wchar_t label[128];GetWindowTextW(draw->hdr.hwndFrom,label,ARRAYSIZE(label));
-            r.left+=size+max(6,size/2);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(222,230,244));
+            r.left+=size+max(6,size/2);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(78,94,115));
             DrawTextW(dc,label,-1,&r,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
             if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(draw->hdr.hwndFrom,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS))DrawFocusRect(dc,&r);
             SelectObject(dc,old);SetWindowLongPtrW(dlg,DWLP_MSGRESULT,CDRF_SKIPDEFAULT);return TRUE;
@@ -632,60 +700,53 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
     }
     case WM_CTLCOLORDLG:return (INT_PTR)panelBrush;
     case WM_CTLCOLORBTN:
-        SetBkColor((HDC)wp,panel);
-        return (INT_PTR)panelBrush;
+        paint_login_parent((HDC)wp,dlg,(HWND)lp);
+        SetBkMode((HDC)wp,TRANSPARENT);
+        return (INT_PTR)GetStockObject(NULL_BRUSH);
     case WM_CTLCOLOREDIT:case WM_CTLCOLORSTATIC:{
         int id=GetDlgCtrlID((HWND)lp);
-        BOOL edit=id==IDC_ACCOUNT||id==IDC_PASSWORD||id==IDC_ACCOUNT_LABEL||id==IDC_PASSWORD_LABEL||id==IDC_PORT||id==IDC_PORT_LABEL;
-        COLORREF text=RGB(235,238,250);
-        if(id==IDC_BRAND)text=RGB(185,196,213);
-        if(id==IDC_ADDRESS)text=RGB(176,187,205);
-        if(id==IDC_HINT)text=RGB(255,183,160);
-        SetTextColor((HDC)wp,text);SetBkColor((HDC)wp,edit?field:panel);
-        return (INT_PTR)(edit?fieldBrush:panelBrush);
+        BOOL edit=id==IDC_ACCOUNT||id==IDC_PASSWORD||id==IDC_PORT;
+        COLORREF text=RGB(38,55,75);
+        if(id==IDC_DEVICE)text=RGB(244,247,252);
+        if(id==IDC_BRAND)text=RGB(193,206,221);
+        if(id==IDC_ADDRESS)text=RGB(181,198,217);
+        if(id==IDC_HINT)text=RGB(159,69,44);
+        if(id==IDC_ACCOUNT_LABEL||id==IDC_PASSWORD_LABEL||id==IDC_PORT_LABEL)text=RGB(95,109,128);
+        SetTextColor((HDC)wp,text);
+        if(edit){SetBkColor((HDC)wp,field);return (INT_PTR)fieldBrush;}
+        paint_login_parent((HDC)wp,dlg,(HWND)lp);SetBkMode((HDC)wp,TRANSPARENT);
+        return (INT_PTR)GetStockObject(NULL_BRUSH);
     }
     case WM_PAINT:{
         PAINTSTRUCT ps;HDC dc=BeginPaint(dlg,&ps);
-        FillRect(dc,&ps.rcPaint,panelBrush);
-        RECT rows={14,52,222,112}, icon={196,21,222,42};
-        MapDialogRect(dlg,&rows);MapDialogRect(dlg,&icon);
-        rounded_box(dc,rows,field,RGB(66,73,85),12);
-        int rowHeight=(rows.bottom-rows.top)/3;
-        SetDCBrushColor(dc,RGB(67,74,87));
-        for(int i=1;i<3;i++){
-            int y=rows.top+i*rowHeight;
-            RECT divider={rows.left+1,y,rows.right-1,y+1};
-            FillRect(dc,&divider,GetStockObject(DC_BRUSH));
-        }
-        rounded_box(dc,icon,panel,RGB(70,80,95),10);
-        RECT screen={202,27,216,34}, stand={205,36,213,37};
-        MapDialogRect(dlg,&screen);MapDialogRect(dlg,&stand);
-        rounded_box(dc,screen,panel,RGB(206,216,237),3);
-        SetDCBrushColor(dc,RGB(206,216,237));FillRect(dc,&stand,GetStockObject(DC_BRUSH));
-        HWND focus=GetFocus();
-        int focusID=focus?GetDlgCtrlID(focus):0;
-        if(focusID==IDC_ACCOUNT || focusID==IDC_PASSWORD || focusID==IDC_PORT){
-            int top=rows.top+rowHeight*(focusID==IDC_PORT?2:focusID==IDC_PASSWORD?1:0);
-            RECT bar={rows.left+2,top+6,rows.left+4,top+rowHeight-6};
-            SetDCBrushColor(dc,RGB(144,158,200));FillRect(dc,&bar,GetStockObject(DC_BRUSH));
-        }
+        paint_login_surface(dc,dlg);
         EndPaint(dlg,&ps);return TRUE;
     }
+    case WM_PRINTCLIENT:paint_login_surface((HDC)wp,dlg);return TRUE;
+    case WM_ERASEBKGND:return TRUE;
+    case WM_SIZE:round_login_window(dlg);login_frame_sync(dlg);return TRUE;
+    case WM_WINDOWPOSCHANGED:case WM_ACTIVATE:login_frame_sync(dlg);break;
+    case WM_SHOWWINDOW:
+        if(!wp){LoginFrame *frame=(LoginFrame*)GetPropW(dlg,LOGIN_FRAME_PROP);if(frame)ShowWindow(frame->hwnd,SW_HIDE);}
+        break;
+    case WM_NCDESTROY:login_frame_destroy(dlg);break;
     case WM_DRAWITEM:{
         const DRAWITEMSTRUCT *item=(const DRAWITEMSTRUCT *)lp;
         BOOL primary=item->CtlID==IDOK,dismiss=item->CtlID==IDC_DISMISS,pressed=(item->itemState&ODS_SELECTED)!=0;
         RECT r=item->rcItem;
-        FillRect(item->hDC,&r,panelBrush);
+        paint_login_parent(item->hDC,dlg,item->hwndItem);
         if(primary){
-            COLORREF fill=pressed?RGB(184,196,234):accent;
-            draw_pill(item->hDC,r,fill);
+            COLORREF fill=(item->itemState&ODS_DISABLED)?RGB(140,160,194):pressed?RGB(51,86,150):accent;
+            rounded_box(item->hDC,r,fill,fill,MulDiv(14,GetDpiForWindow(dlg),96));
+        }else if(item->CtlID==IDCANCEL){
+            rounded_box(item->hDC,r,pressed?RGB(237,242,248):field,RGB(217,225,237),MulDiv(14,GetDpiForWindow(dlg),96));
         }
-        SetTextColor(item->hDC,primary?RGB(37,53,101):pressed?RGB(146,158,182):RGB(193,201,214));
+        SetTextColor(item->hDC,primary?RGB(255,255,255):dismiss?RGB(198,210,227):RGB(83,100,123));
         SetBkMode(item->hDC,TRANSPARENT);
         wchar_t label[64]={0};
         GetWindowTextW(item->hwndItem,label,ARRAYSIZE(label));
         const wchar_t *text=primary?(connecting?rdp_text(Rdp_Connecting):rdp_text(Rdp_Connect)):dismiss?L"×":label;
-        DrawTextW(item->hDC,text,-1,&r,(primary||dismiss?DT_CENTER:DT_LEFT)|DT_VCENTER|DT_SINGLELINE);
+        DrawTextW(item->hDC,text,-1,&r,(primary||dismiss||item->CtlID==IDCANCEL?DT_CENTER:DT_LEFT)|DT_VCENTER|DT_SINGLELINE);
         if((item->itemState & (ODS_FOCUS|ODS_NOFOCUSRECT)) == ODS_FOCUS){
             // Follow Windows keyboard cues without flashing an XOR rectangle on click.
             int h=r.bottom-r.top;

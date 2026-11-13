@@ -34,6 +34,7 @@ static int workspace_would_block(void) { return errno == EAGAIN || errno == EWOU
 static int workspace_nonblocking(int fd) { return fcntl(fd,F_SETFL,O_NONBLOCK)==0; }
 #endif
 
+#include "workspace_clock.h"
 static workspace_socket_t workspace_fd=WORKSPACE_INVALID;
 static HANDLE workspace_thread, workspace_event;
 static CRITICAL_SECTION workspace_lock;
@@ -101,15 +102,14 @@ static DWORD WINAPI workspace_send_frames(void *unused) {
 #endif
     while(!workspace_stopped()) {
         if(WaitForSingleObject(workspace_event,INFINITE)!=WAIT_OBJECT_0)break;
-        ULONGLONG next=last+(probe_workspace_active()?workspace_active_interval:400);
-        ULONGLONG now=WINPR_TIME_NS_TO_MS(winpr_GetTickCount64NS());
-        if(now<next){
-            DWORD delay=(DWORD)(next-now);
+        ULONGLONG now=workspace_clock_ms();
+        DWORD delay=workspace_delay_ms(last,now,probe_workspace_active()?workspace_active_interval:400);
+        if(delay){
 #ifdef _WIN32
             LARGE_INTEGER due;
             due.QuadPart=-(LONGLONG)delay*10000;
             if(timer && SetWaitableTimer(timer,&due,0,NULL,NULL,FALSE))
-                WaitForSingleObject(timer,INFINITE);
+                WaitForSingleObject(timer,delay+50);
             else
 #endif
                 Sleep(delay);
@@ -131,7 +131,7 @@ static DWORD WINAPI workspace_send_frames(void *unused) {
         if(frame){
             if(ok)ok=workspace_write(frame,size);
             free(frame);
-            last=WINPR_TIME_NS_TO_MS(winpr_GetTickCount64NS());
+            last=workspace_clock_ms();
         }
         if(!ok)break;
     }

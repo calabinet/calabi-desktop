@@ -18,17 +18,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Calabi · 启动中</title>
   <style>
+    :root { color-scheme:light; --boot-canvas:#eceef4; --boot-sheet:#ffffff; --boot-ink:#161a2b; --boot-muted:#6b7086; --boot-brand:#2742f0; --boot-line:#e1e4ec; }
+    @media(prefers-color-scheme:dark) { :root { color-scheme:dark; --boot-canvas:#0b0f1a; --boot-sheet:#111624; --boot-ink:#e7eaf3; --boot-muted:#9aa1b8; --boot-brand:#5b77ff; --boot-line:#262d40; } }
     body { margin: 0; height: 100vh; display: flex; align-items: center;
-           justify-content: center; background: #f5f7fa; color: #1f2937;
+           justify-content: center; background: var(--boot-canvas); color: var(--boot-ink);
            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
                         "Microsoft YaHei", sans-serif; }
-    .card { background: #fff; padding: 40px 50px; border-radius: 12px;
+    .card { background: var(--boot-sheet); padding: 40px 50px; border-radius: 12px;
             box-shadow: 0 2px 16px rgba(0,0,0,0.08); text-align: center;
             max-width: 360px; }
-    h1 { font-size: 18px; margin: 0 0 8px; color: #1677ff; }
-    p { font-size: 13px; color: #64748b; margin: 0; }
-    .spinner { width: 24px; height: 24px; border: 2.5px solid #e5e7eb;
-               border-top-color: #1677ff; border-radius: 50%;
+    h1 { font-size: 18px; margin: 0 0 8px; color: var(--boot-brand); }
+    p { font-size: 13px; color: var(--boot-muted); margin: 0; }
+    .spinner { width: 24px; height: 24px; border: 2.5px solid var(--boot-line);
+               border-top-color: var(--boot-brand); border-radius: 50%;
                animation: spin 0.8s linear infinite; margin: 18px auto 14px; }
     .err { color: #ef4444; }
     @keyframes spin { to { transform: rotate(360deg); } }

@@ -71,7 +71,11 @@ static void mesh_apply_state(HWND window,const std::string &reply) {
     bool parsed=bool(input>>tag>>session>>host>>peer>>offer>>manifest)&&tag=="state";
     bool live=parsed&&(!host||mesh_host_matches(peer));
     int state=!parsed?0:!live?1:2;
-    if(state!=meshLastState){meshLastState=state;fprintf(stderr,"rdp_stream stage=mesh_state state=%d host=%d hr=%s\n",state,host,state==1?"0x80004005":"0x00000000");fflush(stderr);}
+    if(state!=meshLastState){
+        // Never log the raw reply (it contains session/offer capabilities).
+        const char *kind=parsed?"state":reply=="none"?"none":reply.empty()?"empty":reply.rfind("error",0)==0?"error":"invalid";
+        meshLastState=state;fprintf(stderr,"rdp_stream stage=mesh_state state=%d host=%d hr=%s reply_kind=%s\n",state,host,state==1?"0x80004005":"0x00000000",kind);fflush(stderr);
+    }
     if(!live || (!meshSession.empty() && session!=meshSession)){
         if(!meshSession.empty()&&active&&std::dynamic_pointer_cast<MeshCopySource>(active->rdpSource)){
             active->cancel(reply=="none" || parsed?HRESULT_FROM_WIN32(ERROR_CONNECTION_ABORTED):STG_E_READFAULT);

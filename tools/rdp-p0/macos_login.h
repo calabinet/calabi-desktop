@@ -25,37 +25,56 @@ static unsigned LoginPortValue(NSString *text) {
 - (BOOL)isFlipped { return YES; }
 - (BOOL)mouseDownCanMoveWindow { return YES; }
 - (void)drawRect:(NSRect)dirty {
-    [LoginColor(32,36,44) setFill];
-    [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:12 yRadius:12] fill];
-    NSBezierPath *rows = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(24,100,352,120) xRadius:8 yRadius:8];
-    [LoginColor(42,48,58) setFill]; [rows fill];
-    [LoginColor(66,73,85) setStroke]; [rows stroke];
-    [LoginColor(67,74,87) setFill]; NSRectFill(NSMakeRect(36,140,328,1));
-    NSRectFill(NSMakeRect(36,180,328,1));
-    [LoginColor(206,216,237) setStroke];
-    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(336,43,30,20) xRadius:2 yRadius:2] stroke];
-    [LoginColor(206,216,237) setFill]; NSRectFill(NSMakeRect(345,66,12,2));
+    [NSGraphicsContext saveGraphicsState];
+    [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:18 yRadius:18] addClip];
+    NSGradient *body = [[NSGradient alloc] initWithStartingColor:LoginColor(248,251,255) endingColor:LoginColor(240,245,251)];
+    [body drawInRect:self.bounds angle:45];
+    NSGradient *header = [[NSGradient alloc] initWithStartingColor:LoginColor(34,60,91) endingColor:LoginColor(23,40,62)];
+    [header drawInRect:NSMakeRect(0,0,self.bounds.size.width,104) angle:0];
+    NSBezierPath *card = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(18,120,364,133) xRadius:11 yRadius:11];
+    [NSColor.whiteColor setFill]; [card fill];
+    [LoginColor(226,232,240) setStroke]; [card stroke];
+    for (NSView *view in self.subviews) {
+        if (![view.identifier isEqualToString:@"login-input"]) continue;
+        NSBezierPath *box = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(view.frame,-6,-5) xRadius:6 yRadius:6];
+        [NSColor.whiteColor setFill]; [box fill];
+        BOOL focused = [view isKindOfClass:NSTextField.class] && [(NSTextField *)view currentEditor] != nil;
+        [(focused ? LoginColor(115,149,207) : LoginColor(220,228,239)) setStroke]; [box stroke];
+    }
+    NSBezierPath *icon = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(20,48,36,36) xRadius:10 yRadius:10];
+    [LoginColor(38,63,91) setFill]; [icon fill];
+    [LoginColor(69,92,119) setStroke]; [icon stroke];
+    [LoginColor(211,231,255) setStroke];
+    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(28,57,20,14) xRadius:2 yRadius:2] stroke];
+    [LoginColor(211,231,255) setFill]; NSRectFill(NSMakeRect(33,75,10,1));
+    [NSGraphicsContext restoreGraphicsState];
 }
 @end
 
 @interface LoginButton : NSButton
 @property BOOL primary;
+@property BOOL secondary;
+@property BOOL header;
 @end
 @implementation LoginButton
 - (void)drawRect:(NSRect)dirty {
     if (self.primary) {
-        [(self.highlighted ? LoginColor(184,196,234) : LoginColor(220,227,255)) setFill];
-        [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:self.bounds.size.height/2 yRadius:self.bounds.size.height/2] fill];
+        [(!self.enabled ? LoginColor(140,160,194) : self.highlighted ? LoginColor(51,86,150) : LoginColor(66,107,180)) setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:7 yRadius:7] fill];
+    } else if (self.secondary) {
+        NSBezierPath *box = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,.5,.5) xRadius:7 yRadius:7];
+        [(self.highlighted ? LoginColor(237,242,248) : NSColor.whiteColor) setFill]; [box fill];
+        [LoginColor(217,225,237) setStroke]; [box stroke];
     }
-    NSColor *color = self.primary ? LoginColor(37,53,101) : LoginColor(193,201,214);
+    NSColor *color = self.primary ? NSColor.whiteColor : self.header ? LoginColor(198,210,227) : LoginColor(83,100,123);
     NSDictionary *attributes = @{NSFontAttributeName:self.font,
                                   NSForegroundColorAttributeName:color};
     NSSize size = [self.title sizeWithAttributes:attributes];
     [self.title drawAtPoint:NSMakePoint((self.bounds.size.width-size.width)/2,
                                       (self.bounds.size.height-size.height)/2) withAttributes:attributes];
     if (self.window.firstResponder == self) {
-        [LoginColor(144,158,200) setStroke];
-        [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,3,3) xRadius:12 yRadius:12] stroke];
+        [LoginColor(115,149,207) setStroke];
+        [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,3,3) xRadius:5 yRadius:5] stroke];
     }
 }
 @end
@@ -92,7 +111,7 @@ static unsigned LoginPortValue(NSString *text) {
 - (LoginButton *)button:(NSString *)text rect:(NSRect)rect action:(SEL)action {
     LoginButton *button = [[LoginButton alloc] initWithFrame:rect];
     button.title = text; button.bordered = NO;
-    button.font = [NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
+    button.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     button.target = self; button.action = action;
     [self.panel.contentView addSubview:button];
     return button;
@@ -103,24 +122,24 @@ static unsigned LoginPortValue(NSString *text) {
 - (instancetype)initWithName:(NSString *)name host:(NSString *)host ssh:(BOOL)ssh {
     if ((self = [super init])) {
         _ssh = ssh;
-        CGFloat height = ssh ? 300 : 324;
+        CGFloat height = ssh ? 334 : 358;
         self.panel = [[LoginPanel alloc] initWithContentRect:NSMakeRect(0,0,400,height)
             styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
         self.panel.delegate = self;
         self.panel.releasedWhenClosed = NO;
         self.panel.opaque = NO; self.panel.backgroundColor = NSColor.clearColor;
         self.panel.hasShadow = YES; self.panel.movableByWindowBackground = YES;
-        self.panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        self.panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
         LoginSurface *surface = [[LoginSurface alloc] initWithFrame:NSMakeRect(0,0,400,height)];
         surface.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         self.panel.contentView = surface;
-        [self label:RDP_NS(Login) rect:NSMakeRect(24,16,260,20) size:12 color:LoginColor(185,196,213)];
+        [self label:RDP_NS(Login) rect:NSMakeRect(20,13,330,18) size:11 color:LoginColor(193,206,221)];
         NSTextField *device = [self label:name.length ? name : RDP_NS(Device)
-            rect:NSMakeRect(24,40,300,28) size:21 color:LoginColor(235,238,250)];
-        device.font = [NSFont systemFontOfSize:21 weight:NSFontWeightSemibold];
-        [self label:host rect:NSMakeRect(24,73,290,18) size:12 color:LoginColor(176,187,205)];
+            rect:NSMakeRect(67,45,310,27) size:20 color:LoginColor(244,247,252)];
+        device.font = [NSFont systemFontOfSize:20 weight:NSFontWeightMedium];
+        [self label:host rect:NSMakeRect(67,75,310,17) size:11 color:LoginColor(181,198,217)];
         NSArray<NSString *> *fieldLabels = @[RDP_NS(Account), RDP_NS(Password), RDP_NS(Port)];
-        const CGFloat labelX = 36, fontSize = 13;
+        const CGFloat labelX = 30, fontSize = 12;
         NSFont *fieldFont = [NSFont systemFontOfSize:fontSize];
         NSDictionary *labelAttributes = @{NSFontAttributeName:fieldFont};
         CGFloat labelWidth = 0;
@@ -129,16 +148,17 @@ static unsigned LoginPortValue(NSString *text) {
             labelWidth = MAX(labelWidth, width);
         }
         labelWidth += 4; // AppKit label insets.
-        CGFloat fieldX = labelX + labelWidth + 10, fieldWidth = 360 - fieldX;
+        CGFloat fieldX = labelX + labelWidth + 11, fieldWidth = 364 - fieldX;
         for (NSUInteger row = 0; row < fieldLabels.count; ++row)
-            [self label:fieldLabels[row] rect:NSMakeRect(labelX,112+40*row,labelWidth,20) size:fontSize color:LoginColor(235,238,250)];
-        self.account = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX,110,fieldWidth,24)];
-        self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX,150,fieldWidth,24)];
-        self.port = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX,190,fieldWidth,24)];
+            [self label:fieldLabels[row] rect:NSMakeRect(labelX,136+40*row,labelWidth,20) size:fontSize color:LoginColor(95,109,128)];
+        self.account = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX,135,fieldWidth,23)];
+        self.password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(fieldX,175,fieldWidth,23)];
+        self.port = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX,215,fieldWidth,23)];
         for (NSTextField *field in @[self.account,self.password,self.port]) {
             field.bordered = NO; field.drawsBackground = NO;
-            field.textColor = LoginColor(235,238,250);
-            field.font = fieldFont;
+            field.textColor = LoginColor(38,55,75);
+            field.font = [NSFont systemFontOfSize:13];
+            field.identifier = @"login-input";
             field.focusRingType = NSFocusRingTypeNone;
             field.delegate = self;
             [self.panel.contentView addSubview:field];
@@ -149,33 +169,40 @@ static unsigned LoginPortValue(NSString *text) {
         self.password.accessibilityLabel = fieldLabels[1];
         self.port.accessibilityLabel = fieldLabels[2];
         [self applyPortHint:nil];
-        self.hint = [self label:@"" rect:NSMakeRect(24,226,352,34) size:12 color:LoginColor(255,183,160)];
+        self.hint = [self label:@"" rect:NSMakeRect(20,260,360,34) size:11 color:LoginColor(159,69,44)];
         self.hint.cell.usesSingleLineMode = NO;
         self.hint.maximumNumberOfLines = 2;
         self.hint.lineBreakMode = NSLineBreakByWordWrapping;
         if (!ssh) {
             self.files = [NSButton checkboxWithTitle:RDP_NS(AllowFiles) target:nil action:nil];
             self.files.state = NSControlStateValueOn;
-            self.files.frame = NSMakeRect(24,0,352,22);
+            self.files.frame = NSMakeRect(20,0,360,22);
+            self.files.font = [NSFont systemFontOfSize:12];
             [self.panel.contentView addSubview:self.files];
         }
         self.remember = [NSButton checkboxWithTitle:RDP_NS(Remember) target:nil action:nil];
         self.remember.font = [NSFont systemFontOfSize:12];
         self.remember.toolTip = self.remember.title;
         NSString *clear = RDP_NS(ClearCredentials);
-        NSFont *clearFont = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        NSFont *clearFont = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
         CGFloat clearWidth = ceil([clear sizeWithAttributes:@{NSFontAttributeName:clearFont}].width) + 16;
-        self.remember.frame = NSMakeRect(24,0,352-clearWidth-6,22);
+        self.remember.frame = NSMakeRect(20,0,360-clearWidth-6,22);
         [self.panel.contentView addSubview:self.remember];
-        self.forgetButton = [self button:clear rect:NSMakeRect(376-clearWidth,0,clearWidth,26) action:@selector(forgetPassword:)];
+        self.forgetButton = [self button:clear rect:NSMakeRect(380-clearWidth,0,clearWidth,26) action:@selector(forgetPassword:)];
         self.forgetButton.font = clearFont;
-        LoginButton *cancel = [self button:RDP_NS(Cancel) rect:NSMakeRect(24,0,100,32) action:@selector(cancel:)];
+        NSDictionary *buttonAttributes = @{NSFontAttributeName:[NSFont systemFontOfSize:13 weight:NSFontWeightMedium]};
+        CGFloat connectWidth = MAX(108,ceil(MAX([RDP_NS(Connect) sizeWithAttributes:buttonAttributes].width,
+            [RDP_NS(Connecting) sizeWithAttributes:buttonAttributes].width))+24);
+        CGFloat cancelWidth = MAX(68,ceil([RDP_NS(Cancel) sizeWithAttributes:buttonAttributes].width)+24);
+        LoginButton *cancel = [self button:RDP_NS(Cancel) rect:NSMakeRect(372-connectWidth-cancelWidth,0,cancelWidth,33) action:@selector(cancel:)];
+        cancel.secondary = YES;
         cancel.keyEquivalent = @"\033";
         self.cancelButton = cancel;
-        LoginButton *connect = [self button:RDP_NS(Connect) rect:NSMakeRect(246,0,130,32) action:@selector(connect:)];
+        LoginButton *connect = [self button:RDP_NS(Connect) rect:NSMakeRect(380-connectWidth,0,connectWidth,33) action:@selector(connect:)];
         connect.primary = YES; connect.keyEquivalent = @"\r";
         self.connectButton = connect;
-        LoginButton *close = [self button:@"×" rect:NSMakeRect(368,6,26,26) action:@selector(cancel:)];
+        LoginButton *close = [self button:@"×" rect:NSMakeRect(357,10,26,26) action:@selector(cancel:)];
+        close.header = YES;
         close.accessibilityLabel = RDP_NS(Close);
         self.account.nextKeyView = self.password;
         self.password.nextKeyView = self.port;
@@ -201,7 +228,7 @@ static unsigned LoginPortValue(NSString *text) {
     self.hint.hidden = !status.length;
     CGFloat rememberTop = NSMinY(self.hint.frame) + 6 + (status.length ? NSHeight(self.hint.frame) : 0);
     if (self.files) {
-        [self.files setFrameOrigin:NSMakePoint(24,rememberTop)];
+        [self.files setFrameOrigin:NSMakePoint(20,rememberTop)];
         rememberTop += 24;
     }
     [self.remember setFrameOrigin:NSMakePoint(NSMinX(self.remember.frame),rememberTop)];
@@ -260,11 +287,13 @@ static unsigned LoginPortValue(NSString *text) {
     NSTextField *field = notification.object;
     if (field == self.account) field.placeholderString = @"";
     NSTextView *editor = (NSTextView *)field.currentEditor;
-    editor.insertionPointColor = LoginColor(235,238,250);
+    editor.insertionPointColor = LoginColor(38,55,75);
+    self.panel.contentView.needsDisplay = YES;
 }
 - (void)controlTextDidEndEditing:(NSNotification *)notification {
     NSTextField *field = notification.object;
     if (field == self.account) field.placeholderString = self.ssh ? @"" : RDP_NS(AccountPlaceholder);
+    self.panel.contentView.needsDisplay = YES;
 }
 - (void)cancel:(id)sender { if (self.dismiss) self.dismiss(); }
 - (BOOL)windowShouldClose:(NSWindow *)sender {
@@ -292,7 +321,7 @@ static unsigned LoginPortValue(NSString *text) {
     [self.panel makeFirstResponder:self.account];
     self.account.placeholderString = @"";
     NSTextView *editor = (NSTextView *)self.account.currentEditor;
-    editor.insertionPointColor = LoginColor(235,238,250);
+    editor.insertionPointColor = LoginColor(38,55,75);
 }
 - (void)close {
     [[NSNotificationCenter defaultCenter] removeObserver:self];

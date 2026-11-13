@@ -153,6 +153,19 @@ def build(work, out):
         subprocess.run([login_test],check=True,env=env,cwd=out,timeout=20)
     finally:
         login_test.unlink(missing_ok=True)
+    clock_test = work/"workspace-clock-test.exe"
+    subprocess.run(["gcc", "-std=gnu11", "-static-libgcc", HERE/"workspace_clock_test.c", "-o", clock_test], check=True)
+    try:
+        subprocess.run([clock_test], check=True, env=env, cwd=out, timeout=10)
+    finally:
+        clock_test.unlink(missing_ok=True)
+    diagnostic_test = work/"session-diag-test.exe"
+    subprocess.run(["gcc", "-std=gnu11", "-DUNICODE", "-D_UNICODE", "-static-libgcc",
+                    HERE/"windows_session_diag_test.c", "-o", diagnostic_test], check=True)
+    try:
+        subprocess.run([diagnostic_test], check=True, env=env, cwd=out, timeout=15)
+    finally:
+        diagnostic_test.unlink(missing_ok=True)
     presentation_test = work/"presentation-test.exe"
     subprocess.run(["gcc", *[flag for flag in cflags if flag not in {"-DCALABI_SHELL_RECEIVE", "-DCALABI_RDP_GFX"}],
                     HERE/"windows_presentation_test.c",

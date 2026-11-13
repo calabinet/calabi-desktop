@@ -16,6 +16,7 @@
 
 mod daemon;
 mod tray;
+mod appearance;
 mod tray_locale;
 mod files;
 #[cfg(any(windows, target_os = "macos"))]
@@ -127,9 +128,9 @@ fn main() {
     log::info!("builder: creating");
     let app = tauri::Builder::default();
     #[cfg(any(windows, target_os = "macos"))]
-    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, ssh::ssh_session, ssh::ssh_read, remote_workspace::remote_workspace, remote_workspace::remote_frame]);
+    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme, ssh::ssh_session, ssh::ssh_read, remote_workspace::remote_workspace, remote_workspace::remote_frame]);
     #[cfg(not(any(windows, target_os = "macos")))]
-    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale]);
+    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme]);
     log::info!("builder: +single_instance");
     let app = app.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
         log::info!("single_instance: second launch detected, focusing existing");
@@ -195,9 +196,10 @@ fn main() {
             .resizable(true)
             .maximizable(true)
             .visible(false)
-            .theme(Some(tauri::Theme::Dark))
+            .theme(None)
             .user_agent(&ua)
             .initialization_script(include_str!("../../shell/tray-language.js"))
+            .initialization_script(include_str!("../../shell/appearance.js"))
             .build()?;
 
             log::info!("setup: building tray");

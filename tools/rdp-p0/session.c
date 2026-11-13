@@ -10,6 +10,7 @@
 #include <freerdp/settings.h>
 #include <winpr/crt.h>
 #include <winpr/synch.h>
+#include "windows_session_diag.h"
 BOOL clipboard_start(freerdp *rdp);
 BOOL clipboard_load(freerdp *rdp);
 void clipboard_poll(void);
@@ -223,6 +224,7 @@ static BOOL paint(rdpContext *context) {
     workspace_publish(gdi->primary_buffer, (unsigned)gdi->width, (unsigned)gdi->height, gdi->stride);
 #endif
     probe_frame(gdi->primary_buffer, gdi->width, gdi->height, gdi->stride);
+    diag_frame();
 #ifdef __APPLE__
     if(display.frameWidth!=(UINT32)gdi->width || display.frameHeight!=(UINT32)gdi->height){
         display.frameWidth=(UINT32)gdi->width;display.frameHeight=(UINT32)gdi->height;
@@ -257,6 +259,9 @@ static BOOL begin_update(rdpContext *context) {
 static BOOL collect_update(rdpContext *context) {
     HGDI_WND wnd = context->gdi->primary->hdc->hwnd;
     if (!wnd->invalid->null) {
+#ifdef _WIN32
+        InterlockedIncrement(&session_diag.dirty);
+#endif
         lastDirty = GetTickCount64();
         if (!pendingPaint) firstDirty = lastDirty;
         pendingPaint = TRUE;
@@ -391,12 +396,17 @@ static BOOL send_inputs(rdpContext *context, ULONGLONG *nextWorkspaceRefresh) {
     while (probe_next_input(&event)) {
 #endif
         rdpInput *input = context->input;
+        diag_input(event.kind != PROBE_MOVE && event.kind != PROBE_REFRESH && event.kind != PROBE_RESIZE);
         if (event.kind >= PROBE_MOVE && event.kind <= PROBE_HWHEEL) {
             // Position first: scrolling and button transitions operate at the current pointer.
             if (!freerdp_input_send_mouse_event(input, PTR_FLAGS_MOVE, event.a, event.b)) return FALSE;
             UINT16 flags = 0;
             switch (event.kind) {
-                case PROBE_MOVE: continue;
+                case PROBE_MOVE:
+#ifdef _WIN32
+                    InterlockedIncrement(&session_diag.sent);
+#endif
+                    continue;
                 case PROBE_LEFT_DOWN: flags = PTR_FLAGS_BUTTON1 | PTR_FLAGS_DOWN; break;
                 case PROBE_LEFT_UP: flags = PTR_FLAGS_BUTTON1; break;
                 case PROBE_RIGHT_DOWN: flags = PTR_FLAGS_BUTTON2 | PTR_FLAGS_DOWN; break;
@@ -420,6 +430,9 @@ static BOOL send_inputs(rdpContext *context, ULONGLONG *nextWorkspaceRefresh) {
             if (!freerdp_input_send_unicode_keyboard_event(input, 0, event.a) ||
                 !freerdp_input_send_unicode_keyboard_event(input, KBD_FLAGS_RELEASE, event.a)) return FALSE;
         }
+#ifdef _WIN32
+        InterlockedIncrement(&session_diag.sent);
+#endif
     }
     return TRUE;
 }
@@ -509,9 +522,13 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
         !freerdp_settings_set_uint32(s, FreeRDP_DesktopHeight, 1080)
 #endif
         ) goto cleanup;
+    diag_start(attempt);
     if (!freerdp_connect(rdp)) {
         result = (int)freerdp_get_last_error(rdp->context);
         const UINT32 server_error = freerdp_error_info(rdp);
+#ifdef _WIN32
+        InterlockedExchange(&session_diag.server_error,server_error);
+#endif
 #ifdef CALABI_RDP_GFX
         gfx_connection_error(server_error, (UINT32)result);
 #endif
@@ -534,8 +551,14 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
     if(getenv("CALABI_RDP_FILE_MESH") && probe_clipboard_files_enabled())mac_mesh_start();
 #endif
     while (!probe_requested_stop() && !freerdp_shall_disconnect_context(rdp->context)) {
+        diag_stage(DIAG_SELECTION);
 #ifdef CALABI_REMOTE_WORKSPACE
         if(workspace_stopped())break;
+#ifdef _WIN32
+        LONG diag_active=probe_workspace_active();
+        if(InterlockedExchange(&session_diag.active,diag_active)!=diag_active)
+            InterlockedExchange64(&session_diag.action_at,0);
+#endif
 #endif
 #ifdef __APPLE__
         const ULONGLONG now = GetTickCount64();
@@ -546,6 +569,7 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
 #endif
         if (attempt && !receivedPaint && now - activated >= 20000) { result = -2; break; }
 #endif
+        diag_stage(DIAG_CLIPBOARD);
         clipboard_poll();
         HANDLE handles[64];
         DWORD count = freerdp_get_event_handles(rdp->context, handles, 63);
@@ -555,6 +579,7 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
 #endif
 #ifdef _WIN32
         if (freerdp_focus_required(rdp) || initialFocus) {
+            diag_stage(DIAG_FOCUS);
             UINT16 locks = (GetKeyState(VK_NUMLOCK)&1 ? KBD_SYNC_NUM_LOCK : 0) |
                            (GetKeyState(VK_CAPITAL)&1 ? KBD_SYNC_CAPS_LOCK : 0) |
                            (GetKeyState(VK_SCROLL)&1 ? KBD_SYNC_SCROLL_LOCK : 0);
@@ -574,9 +599,11 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
             ) { ioFailed = TRUE; break; }
             nextRefresh = now + 3000;
         }
+        diag_stage(DIAG_WAIT);
         if (!count || MsgWaitForMultipleObjectsEx(count, handles, presentation_wait(now), QS_ALLINPUT,
             MWMO_ALERTABLE | MWMO_INPUTAVAILABLE) == WAIT_FAILED) break;
         MSG msg;
+        diag_stage(DIAG_MESSAGES);
         while (PeekMessageW(&msg,NULL,0,0,PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
 #else
         DWORD wait=30;
@@ -585,11 +612,19 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
 #endif
         if (!count || WaitForMultipleObjects(count, handles, FALSE, wait) == WAIT_FAILED) break;
 #endif
-        if (!freerdp_check_event_handles(rdp->context) || !send_inputs(rdp->context, &nextWorkspaceRefresh)) { ioFailed = TRUE; break; }
+        diag_stage(DIAG_EVENTS);
+        if (!freerdp_check_event_handles(rdp->context)) { ioFailed = TRUE; break; }
+#ifdef _WIN32
+        InterlockedIncrement(&session_diag.checks);
+#endif
+        diag_stage(DIAG_INPUT);
+        if (!send_inputs(rdp->context, &nextWorkspaceRefresh)) { ioFailed = TRUE; break; }
 #ifdef CALABI_REMOTE_WORKSPACE
+        diag_stage(DIAG_GRAPHICS);
         sync_workspace_graphics(rdp->context, GetTickCount64(), &nextWorkspaceRefresh);
 #endif
 #ifdef _WIN32
+        diag_stage(DIAG_PRESENT);
         if (!presentation_wait(GetTickCount64()) && !present_update(rdp->context)) break;
 #elif defined(CALABI_REMOTE_WORKSPACE)
         if(batchMarkedUpdates && !presentation_wait(GetTickCount64()) && !present_update(rdp->context))break;
@@ -597,6 +632,9 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
     }
     if (result != -2) result = (int)freerdp_get_last_error(rdp->context);
     const UINT32 server_error = freerdp_error_info(rdp);
+#ifdef _WIN32
+    InterlockedExchange(&session_diag.server_error,server_error);
+#endif
 #ifdef CALABI_RDP_GFX
     gfx_connection_error(server_error, (UINT32)result);
 #endif
@@ -607,8 +645,13 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
             freerdp_settings_get_pointer(rdp->context->settings, FreeRDP_ServerAutoReconnectCookie);
         if (server && server->cbLen == sizeof(*server)) *cookie = *server;
     }
+    diag_stage(DIAG_DISCONNECT);
     freerdp_disconnect(rdp);
 cleanup:
+#ifdef _WIN32
+    InterlockedExchange(&session_diag.result,result);
+#endif
+    diag_stop();
 #if defined(_WIN32) && defined(CALABI_RDP_GFX)
     if (gfx_diagnostic) fclose(gfx_diagnostic);
     gfx_diagnostic = NULL;

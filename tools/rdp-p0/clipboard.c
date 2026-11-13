@@ -137,6 +137,7 @@ static UINT format_list(CliprdrClientContext *channel, const CLIPRDR_FORMAT_LIST
         const CLIPRDR_FORMAT *f = &list->formats[i];
         if (f->formatId == CF_UNICODETEXT && !clipboard.remoteFormat) clipboard.remoteFormat = CF_UNICODETEXT;
         if (f->formatId == CF_DIB && clipboard.remoteFormat != PROBE_FORMAT_FILES) clipboard.remoteFormat = CF_DIB;
+        if (f->formatId == PROBE_FORMAT_DIBV5 && clipboard.remoteFormat != CF_DIB) clipboard.remoteFormat = PROBE_FORMAT_DIBV5;
     }
     if (!owned && probe_clipboard_files_enabled()) for (UINT32 i = 0; i < list->numFormats; ++i)
         if (list->formats[i].formatName && !strcmp(list->formats[i].formatName,"FileGroupDescriptorW")) {
@@ -196,22 +197,31 @@ static UINT data_response(CliprdrClientContext *channel, const CLIPRDR_FORMAT_DA
     (void)channel;
     EnterCriticalSection(&clipboard.lock);
     trace_clipboard("remote_response", response->common.msgFlags);
+    const BOOL image=clipboard.requestedFormat==CF_DIB || clipboard.requestedFormat==PROBE_FORMAT_DIBV5;
+    size_t imageSize=0;
+    BYTE *imageData=NULL;
+    if(image && clipboard.requested && clipboard.requestedGeneration==clipboard.generation &&
+       clipboard.requestedSequence==clipboard.sequence && (response->common.msgFlags & CB_RESPONSE_OK) &&
+       probe_clipboard_content_enabled())
+        imageData=clip_normalize_dib(response->requestedFormatData,response->common.dataLen,&imageSize);
     if (clipboard.requested && clipboard.requestedGeneration == clipboard.generation &&
         clipboard.requestedSequence == clipboard.sequence &&
         (response->common.msgFlags & CB_RESPONSE_OK) &&
-        valid_payload(clipboard.requestedFormat, response->requestedFormatData, response->common.dataLen)) {
+        (image?imageData!=NULL:valid_payload(clipboard.requestedFormat, response->requestedFormatData, response->common.dataLen))) {
         clear_text(&clipboard.incoming, &clipboard.incomingLength);
-        clipboard.incoming = malloc(response->common.dataLen);
+        clipboard.incoming = image?imageData:malloc(response->common.dataLen);
         if (clipboard.incoming) {
-            clipboard.incomingLength = response->common.dataLen;
-            clipboard.incomingFormat = clipboard.requestedFormat;
-            memcpy(clipboard.incoming, response->requestedFormatData, clipboard.incomingLength);
+            clipboard.incomingLength = image?imageSize:response->common.dataLen;
+            clipboard.incomingFormat = image?CF_DIB:clipboard.requestedFormat;
+            if(image)imageData=NULL;
+            else memcpy(clipboard.incoming, response->requestedFormatData, clipboard.incomingLength);
         }
     } else if (clipboard.requested && clipboard.requestedGeneration == clipboard.generation &&
-               clipboard.requestedFormat != CF_UNICODETEXT && clipboard.requestedFormat != CF_DIB) {
+               clipboard.requestedFormat != CF_UNICODETEXT && !image) {
         trace_clipboard("file_descriptor_rejected", response->common.msgFlags);
         probe_files_progress(0,0,-2);
     }
+    free(imageData);
     clipboard.requested = FALSE;
     LeaveCriticalSection(&clipboard.lock);
     return CHANNEL_RC_OK;

@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.1 — 2026-11-13
+
+- **Added:** Light, dark and system appearance options, available from the account menu.
+- **Added:** An auto-hiding fullscreen connection bar on Windows, with minimize and end-session controls.
+- **Changed:** Redesigned tray menus and compact remote login cards, with rounded borders and improved window depth.
+- **Changed:** More compact navigation and overview layouts, improved support for larger Windows text, and thin scrollbars that appear while scrolling.
+- **Fixed:** Windows remote desktop sessions could stop processing input after an extended connection because of a native timer overflow.
+- **Fixed:** Remote login requests could appear unresponsive while waiting for the local agent or an existing session.
+- **Fixed:** Windows screenshots copied to the clipboard can be pasted into a remote Windows session.
+- **Fixed:** Devices republish their remote desktop certificate after re-registering.
+- **Added:** Remote session diagnostics, stall detection and logs using the client system's local date and time.
+
+Install over the existing application to retain device identity, credentials and preferences. The desktop product is 3.0.1; the bundled core version remains 2.8.0 with an updated source commit. This release does not update Android or standalone core packages.
+
 ## 3.0.0 — 2026-11-11
 
 ## Changes

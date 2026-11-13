@@ -39,6 +39,7 @@ static void assert_login_columns(HWND dlg) {
         RECT labelRect=bounds(label), fieldRect=bounds(GetDlgItem(dlg,fieldIds[i]));
         assert(fieldRect.left==first.left && fieldRect.right==first.right);
         assert(labelRect.right<fieldRect.left);
+        assert(abs((labelRect.top+labelRect.bottom)-(fieldRect.top+fieldRect.bottom))<=8);
         wchar_t text[64];assert(GetWindowTextW(label,text,ARRAYSIZE(text))>0);
         HGDIOBJ font=SelectObject(dc,(HFONT)SendMessageW(label,WM_GETFONT,0,0));
         RECT size={0};assert(DrawTextW(dc,text,-1,&size,DT_CALCRECT|DT_SINGLELINE|DT_NOPREFIX)>0);
@@ -50,6 +51,109 @@ static void assert_login_columns(HWND dlg) {
     ReleaseDC(dlg,dc);
     RECT gap={0,0,8,0};assert(MapDialogRect(dlg,&gap));
     assert(first.left-textRight==gap.right);
+    const RdpMessage captions[]={Rdp_Connect,Rdp_Connecting,Rdp_Cancel};
+    dc=GetDC(dlg);assert(dc);
+    for(unsigned i=0;i<ARRAYSIZE(captions);i++){
+        HWND button=GetDlgItem(dlg,i==2?IDCANCEL:IDOK);
+        HGDIOBJ font=SelectObject(dc,(HFONT)SendMessageW(button,WM_GETFONT,0,0));
+        RECT size={0},buttonRect=bounds(button);
+        DrawTextW(dc,rdp_text(captions[i]),-1,&size,DT_CALCRECT|DT_SINGLELINE|DT_NOPREFIX);
+        assert(size.right<buttonRect.right-buttonRect.left);
+        SelectObject(dc,font);
+    }
+    ReleaseDC(dlg,dc);
+}
+static void assert_login_surface(HWND dlg) {
+    RECT bounds;assert(GetClientRect(dlg,&bounds));
+    HRGN region=CreateRectRgn(0,0,0,0);assert(region);
+    assert(GetWindowRgn(dlg,region)!=ERROR);
+    assert(!PtInRegion(region,0,0));
+    assert(PtInRegion(region,bounds.right/2,bounds.bottom-MulDiv(2,GetDpiForWindow(dlg),96)-2));
+    DeleteObject(region);
+    HDC screen=GetDC(dlg),dc=CreateCompatibleDC(screen);assert(screen && dc);
+    HBITMAP bitmap=CreateCompatibleBitmap(screen,bounds.right,bounds.bottom);assert(bitmap);
+    HGDIOBJ old=SelectObject(dc,bitmap);
+    paint_login_surface(dc,dlg);
+    COLORREF top=GetPixel(dc,10,10),other=GetPixel(dc,bounds.right-10,10),bottom=GetPixel(dc,10,bounds.bottom-4);
+    assert(GetRValue(top)<80 && GetBValue(top)<130);
+    assert(top!=other && GetRValue(bottom)>220 && GetGValue(bottom)>220);
+    SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);ReleaseDC(dlg,screen);
+}
+static void assert_login_frame(HWND dlg) {
+    LoginFrame *frame=(LoginFrame*)GetPropW(dlg,LOGIN_FRAME_PROP);assert(frame && IsWindow(frame->hwnd) && frame->painted);
+    assert(GetWindowLongPtrW(frame->hwnd,GWL_EXSTYLE)&WS_EX_NOACTIVATE);
+    assert(GetWindowLongPtrW(frame->hwnd,GWL_EXSTYLE)&WS_EX_TRANSPARENT);
+    RECT r=bounds(dlg),shadow=bounds(frame->hwnd);
+    int w=r.right-r.left,h=r.bottom-r.top,pad=MulDiv(26,GetDpiForWindow(dlg),96);
+    assert(shadow.left==r.left-pad && shadow.top==r.top-pad && shadow.right==r.right+pad && shadow.bottom==r.bottom+pad);
+    DWORD *pixels=NULL;HBITMAP bitmap=login_frame_bitmap(dlg,w,h,pad,TRUE,&pixels);assert(bitmap);
+    int stride=w+pad*2,offset=max(3,MulDiv(7,GetDpiForWindow(dlg),96));
+    DWORD above=pixels[(size_t)(pad-offset)*stride+pad+w/2]>>24;
+    DWORD below=pixels[(size_t)(pad+h+offset)*stride+pad+w/2]>>24;
+    assert(below>above && below<100);
+    assert((pixels[(size_t)(pad+h/2)*stride+pad+w/2]>>24)==255);
+    for(int y=0;y<h+pad*2;y++)for(int x=0;x<stride;x++){
+        DWORD p=pixels[(size_t)y*stride+x],alpha=p>>24;
+        assert((p&255)<=alpha && ((p>>8)&255)<=alpha && ((p>>16)&255)<=alpha);
+    }
+    DeleteObject(bitmap);
+    HWND shadowWindow=frame->hwnd;
+    SetWindowPos(dlg,NULL,r.left+10,r.top+15,0,0,SWP_NOZORDER|SWP_NOSIZE|SWP_NOACTIVATE);
+    shadow=bounds(shadowWindow);assert(shadow.left==r.left+10-pad && shadow.top==r.top+15-pad);
+    SetWindowPos(dlg,NULL,r.left,r.top,0,0,SWP_NOZORDER|SWP_NOSIZE|SWP_NOACTIVATE);
+    ShowWindow(dlg,SW_SHOWNOACTIVATE);assert(shown(shadowWindow));
+    ShowWindow(dlg,SW_HIDE);assert(!shown(shadowWindow));
+}
+// Static controls can receive a parent/shared DC. A child background must not
+// erase siblings, and WM_PRINT may already have translated the viewport.
+static void assert_child_background_clipped(HWND dlg) {
+    RECT r;assert(GetClientRect(dlg,&r));
+    HDC screen=GetDC(dlg),dc=CreateCompatibleDC(screen);
+    HBITMAP bitmap=CreateCompatibleBitmap(screen,r.right,r.bottom);
+    HGDIOBJ old=SelectObject(dc,bitmap);
+    const int ids[]={IDC_BRAND,IDC_DEVICE,IDC_ACCOUNT_LABEL,IDC_FILES,IDOK,IDC_DISMISS};
+    for(unsigned i=0;i<ARRAYSIZE(ids);i++){
+        SetDCBrushColor(dc,RGB(255,0,255));FillRect(dc,&r,GetStockObject(DC_BRUSH));
+        HWND child=GetDlgItem(dlg,ids[i]);RECT childRect;GetClientRect(child,&childRect);
+        POINT origin={0};MapWindowPoints(child,dlg,&origin,1);
+        SetViewportOrgEx(dc,origin.x,origin.y,NULL);
+        paint_login_parent(dc,dlg,child);
+        POINT actual;GetViewportOrgEx(dc,&actual);assert(actual.x==origin.x && actual.y==origin.y);
+        SetViewportOrgEx(dc,0,0,NULL);
+        assert(GetPixel(dc,0,r.bottom-1)==RGB(255,0,255));
+        assert(GetPixel(dc,0,0)==RGB(255,0,255));
+        assert(GetPixel(dc,origin.x+childRect.right/2,origin.y+childRect.bottom/2)!=RGB(255,0,255));
+    }
+    SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);ReleaseDC(dlg,screen);
+}
+static void save_login_screenshot(HWND dlg) {
+    wchar_t path[1024];
+    DWORD length=GetEnvironmentVariableW(L"CALABI_LOGIN_TEST_SCREENSHOT",path,ARRAYSIZE(path));
+    if(!length || length>=ARRAYSIZE(path))return;
+    RECT r;assert(GetClientRect(dlg,&r));
+    int pad=MulDiv(26,GetDpiForWindow(dlg),96),w=r.right+pad*2,h=r.bottom+pad*2;
+    HDC screen=GetDC(dlg),dc=CreateCompatibleDC(screen);assert(screen && dc);
+    BITMAPINFO info={0};
+    info.bmiHeader=(BITMAPINFOHEADER){sizeof(BITMAPINFOHEADER),w,-h,1,32,BI_RGB};
+    void *pixels=NULL;HBITMAP bitmap=CreateDIBSection(screen,&info,DIB_RGB_COLORS,&pixels,NULL,0);assert(bitmap && pixels);
+    HGDIOBJ old=SelectObject(dc,bitmap);
+    DWORD *decoration=NULL;HBITMAP backdrop=login_frame_bitmap(dlg,r.right,r.bottom,pad,TRUE,&decoration);assert(backdrop);
+    for(size_t i=0;i<(size_t)w*h;i++){
+        DWORD p=decoration[i],a=p>>24;
+        ((DWORD*)pixels)[i]=(((p>>16&255)+230*(255-a)/255)<<16)|(((p>>8&255)+235*(255-a)/255)<<8)|((p&255)+241*(255-a)/255);
+    }
+    DeleteObject(backdrop);
+    HRGN region=CreateRectRgn(0,0,0,0);assert(region && GetWindowRgn(dlg,region)!=ERROR);
+    OffsetRgn(region,pad,pad);SelectClipRgn(dc,region);SetViewportOrgEx(dc,pad,pad,NULL);
+    SendMessageW(dlg,WM_PRINT,(WPARAM)dc,PRF_CLIENT|PRF_CHILDREN|PRF_ERASEBKGND);
+    GdiFlush();
+    DWORD size=(DWORD)((size_t)w*h*4),written;
+    BITMAPFILEHEADER header={0};header.bfType=0x4d42;header.bfOffBits=sizeof(header)+sizeof(info.bmiHeader);header.bfSize=header.bfOffBits+size;
+    HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);assert(file!=INVALID_HANDLE_VALUE);
+    assert(WriteFile(file,&header,sizeof(header),&written,NULL));
+    assert(WriteFile(file,&info.bmiHeader,sizeof(info.bmiHeader),&written,NULL));
+    assert(WriteFile(file,pixels,size,&written,NULL));CloseHandle(file);
+    SelectObject(dc,old);DeleteObject(region);DeleteObject(bitmap);DeleteDC(dc);ReleaseDC(dlg,screen);
 }
 static void pump(void) {
     MSG m;while(PeekMessageW(&m,NULL,0,0,PM_REMOVE)) {
@@ -86,11 +190,20 @@ static void test_localized_login(BOOL ssh) {
         assert(shown(GetDlgItem(localized,IDC_PORT)) && shown(GetDlgItem(localized,IDC_PORT_LABEL)));
         assert(login_port(localized)==(ssh?22:PROBE_RDP_DEFAULT_PORT));
         assert_login_columns(localized);
+        assert_login_surface(localized);
+        assert_login_frame(localized);
+        assert_child_background_clipped(localized);
+        if(!ssh && !strcmp(rdp_locale_codes[i],"zh-CN")){
+            SetDlgItemTextW(localized,IDC_ACCOUNT,L"waiwofei");
+            save_login_screenshot(localized);
+        }
         assert(!shown(GetDlgItem(localized,IDC_HINT)));
-        DestroyWindow(localized);
+        HWND frame=((LoginFrame*)GetPropW(localized,LOGIN_FRAME_PROP))->hwnd;
+        DestroyWindow(localized);assert(!IsWindow(frame));
     }
 }
 int main(void) {
+    SetProcessDPIAware(); // Match the actual helper before creating any dialog.
     SetEnvironmentVariableW(L"CALABI_UI_LOCALE_FILE",NULL);
     SetEnvironmentVariableW(L"CALABI_RDP_PORT",NULL);
     SetEnvironmentVariableW(L"CALABI_SSH_PORT",NULL);
@@ -143,7 +256,7 @@ int main(void) {
     checkboxDraw.dwDrawStage=CDDS_PREPAINT;checkboxDraw.hdc=checkboxDC;GetClientRect(remember,&checkboxDraw.rc);
     SendMessageW(loginWindow,WM_NOTIFY,IDC_REMEMBER,(LPARAM)&checkboxDraw);
     assert(GetWindowLongPtrW(loginWindow,DWLP_MSGRESULT)==CDRF_SKIPDEFAULT);
-    assert(GetTextColor(checkboxDC)==RGB(222,230,244));
+    assert(GetTextColor(checkboxDC)==RGB(78,94,115));
     DeleteDC(checkboxDC);
     assert(!shown(window));
     HWND rdpHint=GetDlgItem(loginWindow,IDC_HINT),rdpFiles=GetDlgItem(loginWindow,IDC_FILES);
@@ -155,6 +268,7 @@ int main(void) {
     RECT rdpExpanded=bounds(loginWindow);
     assert(shown(rdpHint) && bounds(rdpFiles).top>bounds(rdpHint).bottom);
     assert(rdpExpanded.top==rdpCompact.top && rdpExpanded.bottom>rdpCompact.bottom);
+    assert_login_surface(loginWindow);
     SetDlgItemInt(loginWindow,IDC_PORT,3391,FALSE);
     CheckDlgButton(loginWindow,IDC_FILES,BST_UNCHECKED);
     SendMessageW(loginWindow,WM_COMMAND,IDOK,0);

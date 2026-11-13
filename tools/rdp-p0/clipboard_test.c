@@ -91,7 +91,7 @@ static UINT list_sent(CliprdrClientContext *channel, const CLIPRDR_FORMAT_LIST *
     return 0;
 }
 static UINT requested(CliprdrClientContext *channel, const CLIPRDR_FORMAT_DATA_REQUEST *request) {
-    (void)channel; assert(request->requestedFormatId == CF_UNICODETEXT || request->requestedFormatId == CF_DIB || request->requestedFormatId >= 0xc000);
+    (void)channel; assert(request->requestedFormatId == CF_UNICODETEXT || request->requestedFormatId == CF_DIB || request->requestedFormatId == PROBE_FORMAT_DIBV5 || request->requestedFormatId >= 0xc000);
     requests++;
     return 0;
 }
@@ -192,6 +192,14 @@ int main(void) {
     get.requestedFormatId=CF_DIB;data_request(&channel,&get);assert(lastFlags==CB_RESPONSE_OK && lastLength==48);
     unicode.formatId=CF_DIB;list.numFormats=1;format_list(&channel,&list);poll_now();response(&channel,dib,sizeof(dib));poll_now();
     assert(nativeFormat==CF_DIB && nativeLength==48);
+    // A peer can advertise only CF_DIBV5; request that ID, apply canonical CF_DIB.
+    BYTE v5[128]={0};clip_put32(v5,124);clip_put32(v5+4,1);clip_put32(v5+8,(uint32_t)-1);
+    v5[12]=1;v5[14]=32;clip_put32(v5+16,3);
+    clip_put32(v5+40,0xff0000);clip_put32(v5+44,0xff00);clip_put32(v5+48,0xff);v5[126]=255;
+    unicode.formatId=PROBE_FORMAT_DIBV5;format_list(&channel,&list);poll_now();response(&channel,v5,sizeof(v5));poll_now();
+    assert(nativeFormat==CF_DIB && nativeLength==44 && nativeText[42]==255);
+    unicode.formatId=CF_DIB;format_list(&channel,&list);poll_now();response(&channel,v5,sizeof(v5));poll_now();
+    assert(nativeFormat==CF_DIB && nativeLength==44 && clip_valid_dib(nativeText,nativeLength));
     // A format request gets its image bytes, never the local bundle or both images.
     static const BYTE pngSignature[] = {137, 80, 78, 71, 13, 10, 26, 10};
     nativeFormat = PROBE_FORMAT_PNG;

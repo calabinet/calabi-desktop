@@ -14,7 +14,13 @@ from product import ROOT, config, run
 PUBKEY = "+Un1Ssse7lflEeEPsr382+j7WduOrY8K7f4xZPMZ5fs="
 
 
-def release(product, directory, publish=False):
+def verify_android_architecture(archive):
+    abis = {name.split('/')[1] for name in archive.namelist() if re.fullmatch(r'lib/[^/]+/[^/]+\.so', name)}
+    if abis != {"arm64-v8a"}:
+        raise ValueError("APK must contain arm64-v8a native libraries only; found: " + ", ".join(sorted(abis)))
+
+
+def release(product, directory, publish=False, notes_file=None):
     version, core = config(product)
     manifest_file = directory / "build-manifest.json"
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
@@ -57,7 +63,8 @@ def release(product, directory, publish=False):
         if "name='net.calabi.app'" not in package or f"versionName='{version}'" not in package or f"versionCode='{code}'" not in package:
             raise ValueError("APK identity or version differs from product release metadata")
         with zipfile.ZipFile(apk) as archive:
-            for abi in ["arm64-v8a", "armeabi-v7a"]:
+            verify_android_architecture(archive)
+            for abi in ["arm64-v8a"]:
                 library = archive.read("lib/" + abi + "/libgojni.so")
                 if core["commit"].encode() not in library or core["version"].encode() not in library:
                     raise ValueError("APK core differs from the pinned source: " + abi)
@@ -83,18 +90,23 @@ def release(product, directory, publish=False):
         verify_update[verify_update.index("--file")+1] = str(descriptor)
         verify_update[verify_update.index("--sig")+1] = str(directory / "latest.json.sig")
         subprocess.run(verify_update, cwd=ROOT, check=True)
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    section = re.search(r"^## " + re.escape(version) + r"[^\n]*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
-    if not section:
-        raise ValueError("missing product changelog")
     notes = directory / "release-notes.md"
-    text = section[1].strip() + "\n\nBundled core: " + core["version"] + " (`" + core["commit"] + "`).\n"
-    if product == "android":
-        certificate = (ROOT / "scripts/mobile/android-release-cert.sha256").read_text(encoding="utf-8").strip()
-        if not re.fullmatch(r"[0-9A-Fa-f:]{64,95}", certificate):
-            raise ValueError("invalid pinned Android signer fingerprint")
-        text += "\nAndroid signing certificate SHA-256: `" + certificate + "`.\n"
-        text += "Verify with `apksigner verify --print-certs calabi-android.apk`.\n"
+    if notes_file:
+        text = notes_file.read_text(encoding="utf-8")
+        if not text.strip():
+            raise ValueError("release notes must not be empty")
+    else:
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        section = re.search(r"^## " + re.escape(version) + r"[^\n]*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
+        if not section:
+            raise ValueError("missing product changelog")
+        text = section[1].strip() + "\n\nBundled core: " + core["version"] + " (`" + core["commit"] + "`).\n"
+        if product == "android":
+            certificate = (ROOT / "scripts/mobile/android-release-cert.sha256").read_text(encoding="utf-8").strip()
+            if not re.fullmatch(r"[0-9A-Fa-f:]{64,95}", certificate):
+                raise ValueError("invalid pinned Android signer fingerprint")
+            text += "\nAndroid signing certificate SHA-256: `" + certificate + "`.\n"
+            text += "Verify with `apksigner verify --print-certs calabi-android.apk`.\n"
     notes.write_text(text, encoding="utf-8")
     attachments = [str(directory / n) for n in sorted(expected)] + [str(directory / "SHA256SUMS"), str(manifest_file), str(signature)]
     print(json.dumps({"repository": repo, "tag": "v"+version, "source_commit": manifest["source_commit"], "attachments": attachments}, indent=2))
@@ -114,5 +126,6 @@ if __name__ == "__main__":
     parser.add_argument("product", choices=["desktop", "android"])
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--notes-file", type=Path, help="reviewed release notes; default is the product changelog")
     args = parser.parse_args()
-    release(args.product, (args.directory or ROOT / "dist" / ("release-"+args.product)).resolve(), args.publish)
+    release(args.product, (args.directory or ROOT / "dist" / ("release-"+args.product)).resolve(), args.publish, args.notes_file)

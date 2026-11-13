@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 src="$root/tools/rdp-p0"
 tmp=$(mktemp -d)
-trap 'rm -f "$tmp/session.o" "$tmp/clipboard.o" "$tmp/window.o" "$tmp/clipboard-test" "$tmp/display-layout-test" "$tmp/display-channel-test" "$tmp/gfx-channel-test" "$tmp/macos-clipboard-test" "$tmp/macos-mesh-test" "$tmp/macos-fileprovider-test" "$tmp/build.json"; rmdir "$tmp"' EXIT
+trap 'rm -f "$tmp/session.o" "$tmp/clipboard.o" "$tmp/window.o" "$tmp/clipboard-test" "$tmp/display-layout-test" "$tmp/display-channel-test" "$tmp/gfx-channel-test" "$tmp/macos-clipboard-test" "$tmp/macos-login-test" "$tmp/macos-mesh-test" "$tmp/macos-fileprovider-test" "$tmp/build.json"; rmdir "$tmp"' EXIT
 cc=(xcrun clang)
 cargo_args=()
 link_paths=()
@@ -59,6 +59,8 @@ if [[ $run_tests -eq 1 ]]; then
   printf '%s\n' 'RDP clipboard lifecycle tests passed.' >&2
   "${cc[@]}" -fobjc-arc "$src/macos_clipboard_test.m" -framework AppKit -framework ImageIO -framework CoreGraphics -o "$tmp/macos-clipboard-test"
   "$tmp/macos-clipboard-test" >&2
+  "${cc[@]}" -fobjc-arc "$src/macos_login_test.m" -framework AppKit -o "$tmp/macos-login-test"
+  "$tmp/macos-login-test" >&2
   "${cc[@]}" -fobjc-arc "$src/macos_mesh_copy_test.m" -framework AppKit -framework ImageIO -framework CoreGraphics -o "$tmp/macos-mesh-test"
   "$tmp/macos-mesh-test" >&2
   "${cc[@]}" -fobjc-arc "$src/macos_fileprovider_bridge_test.m" -framework AppKit -framework ImageIO -framework CoreGraphics -o "$tmp/macos-fileprovider-test"

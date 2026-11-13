@@ -30,6 +30,31 @@ int main(void) {
     BYTE dib[48]={0};clip_put32(dib,40);clip_put32(dib+4,2);clip_put32(dib+8,1);dib[12]=1;dib[14]=24;dib[42]=255;
     seq=GetClipboardSequenceNumber();assert(probe_clipboard_write(dib,sizeof(dib),PROBE_FORMAT_DIB,seq,&after));
     seq=UINT64_MAX;assert(probe_clipboard_read(&data,&n,&fmt,&seq) && fmt==PROBE_FORMAT_DIB && n==48 && !memcmp(data,dib,n));free(data);
+    // Snipping-tool-style top-down DIBV5 with explicit BGRA masks.
+    BYTE screenshot[140]={0};clip_put32(screenshot,124);clip_put32(screenshot+4,2);clip_put32(screenshot+8,(uint32_t)-2);
+    screenshot[12]=1;screenshot[14]=32;clip_put32(screenshot+16,3);
+    clip_put32(screenshot+40,0xff0000);clip_put32(screenshot+44,0xff00);clip_put32(screenshot+48,0xff);clip_put32(screenshot+52,0xff000000);
+    screenshot[126]=255;screenshot[129]=255;screenshot[132]=255;
+    screenshot[136]=screenshot[137]=screenshot[138]=255;
+    size_t convertedSize;BYTE *converted=clip_normalize_dib(screenshot,sizeof(screenshot),&convertedSize);
+    assert(converted && convertedSize==56 && clip_valid_dib(converted,convertedSize));
+    assert(clip_u32(converted+8)==(uint32_t)-2 && converted[42]==255 && converted[44]==255 && converted[48]==255);free(converted);
+    assert(!clip_normalize_dib(screenshot,sizeof(screenshot)-1,&convertedSize));
+    clip_put32(screenshot+40,0xff);assert(!clip_normalize_dib(screenshot,sizeof(screenshot),&convertedSize));clip_put32(screenshot+40,0xff0000);
+    clip_put32(screenshot+112,124);assert(!clip_normalize_dib(screenshot,sizeof(screenshot),&convertedSize));clip_put32(screenshot+112,0);
+    put_clip(CF_DIBV5,screenshot,sizeof(screenshot));seq=UINT64_MAX;
+    assert(probe_clipboard_read(&data,&n,&fmt,&seq) && data && fmt==PROBE_FORMAT_DIB && clip_valid_dib(data,n));
+    assert(clip_u32(data+4)==2 && (int32_t)clip_u32(data+8)==-2);free(data);
+    BYTE v4[124]={0};memcpy(v4,screenshot,108);clip_put32(v4,108);memcpy(v4+108,screenshot+124,16);
+    converted=clip_normalize_dib(v4,sizeof(v4),&convertedSize);assert(converted && convertedSize==56);free(converted);
+    BYTE masks[68]={0};memcpy(masks,screenshot,52);clip_put32(masks,40);memcpy(masks+52,screenshot+124,16);
+    converted=clip_normalize_dib(masks,sizeof(masks),&convertedSize);assert(converted && convertedSize==56);free(converted);
+    // Advertised screenshot data may be delayed: don't consume its sequence on failure.
+    uint64_t previous=GetClipboardSequenceNumber();
+    assert(OpenClipboard(window));assert(EmptyClipboard());SetClipboardData(CF_DIBV5,NULL);CloseClipboard();
+    seq=previous;assert(probe_clipboard_read(&data,&n,&fmt,&seq)==0 && !data && seq==previous);
+    put_clip(CF_DIBV5,screenshot,sizeof(screenshot));
+    assert(probe_clipboard_read(&data,&n,&fmt,&seq) && data && fmt==PROBE_FORMAT_DIB);free(data);
     wchar_t temp[MAX_PATH],folder[MAX_PATH];assert(GetTempPathW(MAX_PATH,temp));assert(GetTempFileNameW(temp,L"cft",0,folder));
     assert(DeleteFileW(folder) && CreateDirectoryW(folder,NULL));
     FileBatch fixture={0};fixture.count=3;
