@@ -2,9 +2,11 @@
 
 Native Calabi desktop application for Windows and macOS. The application bundles a tested Calabi daemon, remote desktop components and file transfer helpers.
 
-![Calabi Desktop self-hosted mesh showing connected macOS, Linux, Windows and Android devices](https://raw.githubusercontent.com/calabinet/calabi-desktop/main/apps/client-desktop/docs/images/self-hosted-mesh.png)
+![Calabi Desktop self-hosted mesh in dark appearance with Remote access available](https://raw.githubusercontent.com/calabinet/calabi-desktop/main/apps/client-desktop/docs/images/self-hosted-mesh-dark.png)
 
-*The self-hosted mesh view in Calabi Desktop, rendered with example device names and addresses.*
+*Self-hosted mesh in dark appearance, rendered with example device names and addresses.*
+
+The installed desktop app supports SSH access to Linux devices in self-hosted mode. **Remote** shows recent logins when the desktop components are available; use a device's **More** menu to start a supported connection. Windows **Remote login** additionally requires verified device ownership, which the default self-hosted auth-key setup does not currently provide.
 
 The product version is `apps/client-desktop/VERSION`. The shared core is maintained in [calabinet/calabi](https://github.com/calabinet/calabi); `apps/client-desktop/core-source.json` pins its version and complete public commit. Core source is fetched for builds, rather than maintained in this repository.
 
