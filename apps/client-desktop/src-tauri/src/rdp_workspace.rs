@@ -348,7 +348,6 @@ pub fn frame_revision(frame: &[u8]) -> u32 {
         .map_or(0, |bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
 }
 
-#[cfg(any(windows, all(target_os = "macos", feature = "rdp-native-macos"), test))]
 pub fn frame_metadata(frame: &[u8], revision: u32, thumbnail: bool) -> Vec<u8> {
     let Some(header) = frame.get(..12) else {
         return Vec::new();
@@ -520,5 +519,36 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+}
+
+// A small RGBA frame crosses the local agent pipe; full desktop pixels stay here.
+pub fn history_preview(frame: &[u8]) -> Option<String> {
+    let header = frame.get(..12)?;
+    let width = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
+    let height = u32::from_le_bytes(header[8..12].try_into().ok()?) as usize;
+    if width == 0 || height == 0 || width > MAX_SIDE as usize || height > MAX_SIDE as usize
+        || frame.len() != 12 + width * height * 4 { return None; }
+    let preview = frame_metadata(frame, 0, true);
+    if preview.len() < 14 { return None; }
+    use std::fmt::Write;
+    let mut encoded = String::with_capacity((preview.len() - 12) * 2);
+    for byte in &preview[12..] { let _ = write!(encoded, "{byte:02x}"); }
+    Some(encoded)
+}
+
+#[cfg(test)]
+mod history_preview_tests {
+    #[test]
+    fn preview_uses_real_pixels_and_rejects_incomplete_frames() {
+        assert!(super::history_preview(&[]).is_none());
+        let mut frame = Vec::new();
+        for n in [1u32, 2, 1] { frame.extend_from_slice(&n.to_le_bytes()); }
+        frame.extend_from_slice(&[0, 0, 255, 0, 0, 255, 0, 0]);
+        let preview = super::history_preview(&frame).unwrap();
+        assert!(preview.starts_with("c060ff0000ff"));
+        assert!(preview.contains("00ff00ff"));
+        frame.pop();
+        assert!(super::history_preview(&frame).is_none());
     }
 }

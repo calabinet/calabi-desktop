@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.1.0 — 2026-11-14
+
+- **Added:** Recent Remote cards display locally saved Windows desktop and Linux SSH terminal thumbnails. Session switching also shows current SSH terminal contents.
+- **Added:** Windows fullscreen SSH sessions share the top-edge connection bar, with minimize and end-session controls.
+- **Changed:** Sign-in and two-step verification use separate steps within the same compact window; the main window expands after authentication.
+- **Changed:** File-transfer certificates are maintained automatically when safe. Routine certificate details and the separate Transfer Center settings panel are hidden.
+- **Fixed:** Windows remote desktop uses the remote computer's input method. Physical Shift state is synchronized so shifted punctuation works when a modifier transition is missed.
+- **Fixed:** Desktop thumbnails can cross the local agent channel without increasing the request limit for ordinary operations.
+
+Install over the existing desktop application to retain device identity, credentials and preferences. The bundled core remains 2.8.0 with an updated source commit. Windows x64 and macOS universal installers are updated; standalone core packages and their update channel are unchanged.
+
+## Unreleased
+
+- **Added:** Self-hosted deployments can use desktop RDP to sign in to approved Windows devices in the same mesh, using Windows credentials and the existing access rules and pinned certificates. Platform user ownership is not required for this self-hosted authorization.
+
+Upgrade the self-hosted coordinator and both desktop endpoints. Published 3.0.1 installers do not include this change.
+
 ## 3.0.1 — 2026-11-13
 
 - **Added:** Light, dark and system appearance options, available from the account menu.

@@ -829,6 +829,9 @@ pub enum Request {
     Input {
         data: String,
     },
+    Preview {
+        pixels: String,
+    },
     #[cfg(target_os = "macos")]
     ClipboardRead,
     #[cfg(target_os = "macos")]
@@ -851,6 +854,23 @@ pub async fn ssh_session(
     let session = session_for(&window, &state, &session_id)?;
     match request {
         Request::Files { action } => sftp::dispatch(&window, &agent, &session, action).await,
+        Request::Preview { pixels } => {
+            if pixels.len() < 12 || pixels.len() > (2 + 192 * 108 * 4) * 2
+                || !pixels.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("Invalid SSH preview".into());
+            }
+            if resolve(&agent, &session.peer).await? != session.target {
+                return Err("sshTargetChanged".into());
+            }
+            session_for(&window, &state, &session_id)?;
+            let reply = agent.call(json!({
+                "action":"ssh_preview", "peer":session.peer, "rdp_profile":session.target.profile,
+                "rdp_account":session.account, "ssh_port":session.port, "ssh_preview":pixels
+            })).await?;
+            if reply.get("error").is_some() { return Err("sshHistoryFailed".into()); }
+            Ok(Value::Null)
+        }
         Request::Info => Ok(json!({
             "name":session.name, "host":session.target.host, "port":session.port, "account":session.account,
             "native_clipboard": cfg!(target_os = "macos"),

@@ -38,7 +38,7 @@ fn main() {
     }
 
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["product_info", "files_action", "file_receipt_action", "tray_action", "tray_set_locale", "desktop_set_theme", "ssh_session", "ssh_read", "remote_workspace", "remote_frame"]),
+        tauri_build::AppManifest::new().commands(&["product_info", "desktop_set_login_window", "files_action", "file_receipt_action", "tray_action", "tray_set_locale", "desktop_set_theme", "ssh_session", "ssh_read", "remote_workspace", "remote_frame"]),
     )).expect("build desktop permissions");
 }
 

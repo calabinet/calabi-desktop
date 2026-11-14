@@ -6,7 +6,11 @@ Native Calabi desktop application for Windows and macOS. The application bundles
 
 *Self-hosted mesh in dark appearance, rendered with example device names and addresses.*
 
-The installed desktop app supports SSH access to Linux devices in self-hosted mode. **Remote** shows recent logins when the desktop components are available; use a device's **More** menu to start a supported connection. Windows **Remote login** additionally requires verified device ownership, which the default self-hosted auth-key setup does not currently provide.
+Source builds support Windows RDP and Linux SSH access in self-hosted mode. **Remote** shows recent logins when the desktop components are available; use a device's **More** menu to start a connection. Self-hosted RDP requires approved devices in the same mesh, permitted access rules and valid Windows credentials. It does not require a platform account.
+
+Desktop 3.1.0 includes the client-side authorization update. Self-hosted RDP also requires an updated coordinator built from current core source. Standalone coordinator binaries are not republished with this client release.
+
+The RDP access permission does not grant owner-only clipboard-file access. Use **File transfers** to send files between unattributed self-hosted devices.
 
 The product version is `apps/client-desktop/VERSION`. The shared core is maintained in [calabinet/calabi](https://github.com/calabinet/calabi); `apps/client-desktop/core-source.json` pins its version and complete public commit. Core source is fetched for builds, rather than maintained in this repository.
 

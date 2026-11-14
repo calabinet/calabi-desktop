@@ -50,7 +50,17 @@ const FILE_AGENT_TIMEOUT: &str = "Local file agent response timed out; retry the
 const RDP_FOCUS_TIMEOUT: &str = "Remote window is not responding; try again shortly";
 
 fn file_control_operation(operation: &str) -> bool {
-    matches!(operation, "snapshot" | "rdp_target" | "rdp_history" | "rdp_record" | "ssh_target" | "ssh_history" | "ssh_record")
+    matches!(operation, "snapshot" | "rdp_target" | "rdp_history" | "rdp_record" | "rdp_preview" | "ssh_target" | "ssh_history" | "ssh_record" | "ssh_preview")
+}
+
+fn encode_file_action(action: &Value) -> Result<Vec<u8>, String> {
+    let mut body = serde_json::to_vec(action).map_err(|e| e.to_string())?;
+    // Thumbnail pixels need more than the ordinary command budget. Leave room
+    // for the newline inside the Go agent's bounded 256 KiB scanner token.
+    let maximum = if matches!(action["action"].as_str(), Some("rdp_preview" | "ssh_preview")) { 256*1024-2 } else { 8192 };
+    if body.len() > maximum { return Err("File action too large".into()); }
+    body.push(b'\n');
+    Ok(body)
 }
 
 // Enqueuing a focus message is not proof that a live window was shown. Confirm
@@ -176,9 +186,7 @@ impl FileAgent {
         if guard.is_none() {
             *guard = Some(self.connect(supervisor, console).await?);
         }
-        let mut body = serde_json::to_vec(&action).map_err(|e| e.to_string())?;
-        if body.len() > 8192 { return Err("File action too large".into()); }
-        body.push(b'\n');
+        let body = encode_file_action(&action)?;
 
         let operation = action["action"].as_str().unwrap_or("");
         let deadline = if file_control_operation(operation) {
@@ -502,10 +510,10 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
     if action["action"] == "ssh_history" {
         return crate::ssh::history(&agent).await;
     }
-    if matches!(action["action"].as_str(), Some("ssh_target" | "ssh_record")) {
+    if matches!(action["action"].as_str(), Some("ssh_target" | "ssh_record" | "ssh_preview")) {
         return Err("SSH targets and records require a native session".into());
     }
-    if action["action"] == "rdp_record" { return Err("Remote login records require a native session".into()); }
+    if action["action"] == "rdp_record" || action["action"] == "rdp_preview" { return Err("Remote login records require a native session".into()); }
     #[cfg(any(windows, target_os = "macos"))]
     if action["action"] == "rdp_open" {
         log::info!("rdp_open requested");
@@ -602,6 +610,8 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             let mut copy_requested = false;
             let mut copy_retry_at = tokio::time::Instant::now();
             let mut login_recorded=false;
+            let mut preview_revision = 0;
+            let mut preview_at = tokio::time::Instant::now() - std::time::Duration::from_secs(10);
             let mut pin_verified=false;
             let mut workspace_connected=false;
             let mut login_display = None;
@@ -651,6 +661,18 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                         continue;
                     }
                     _=copy_tick.tick()=>{
+                        if login_recorded && workspace_connected && pin_verified && preview_at.elapsed().as_secs() >= 10 {
+                            let frame = bridge.latest_frame();
+                            let revision = crate::rdp_workspace::frame_revision(&frame);
+                            if revision != 0 && revision != preview_revision {
+                                if let Some(preview) = crate::rdp_workspace::history_preview(&frame) {
+                                    let saved = agent.call(json!({"action":"rdp_preview","peer":key,"rdp_profile":profile,"rdp_preview":preview})).await;
+                                    if matches!(saved, Ok(ref v) if v.get("error").is_none()) { preview_revision = revision; }
+                                }
+                            }
+                            preview_at = tokio::time::Instant::now();
+                        }
+
                         if !bridge.accepts_clipboard() {
                             if let Some(id)=copy_session.take() {
                                 let _=agent.call(json!({"action":"mesh_copy_end","id":id})).await;
@@ -797,6 +819,14 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                 if pin.is_empty() { agent.record_error("rdp_verify","No matching authenticated RDP listener certificate for this device"); }
                 if input.write_all(format!("{pin}\n").as_bytes()).await.is_err(){break;}
             }
+            if login_recorded && workspace_connected && pin_verified {
+                let frame = bridge.latest_frame();
+                if crate::rdp_workspace::frame_revision(&frame) != preview_revision {
+                    if let Some(preview) = crate::rdp_workspace::history_preview(&frame) {
+                        let _ = agent.call(json!({"action":"rdp_preview","peer":key,"rdp_profile":profile,"rdp_preview":preview})).await;
+                    }
+                }
+            }
             retire_rdp_focus(&mut focus_requests);
             #[cfg(windows)]
             if let Some(job)=clipboard_job.take(){let _=agent.call(json!({"action":"cancel","id":job})).await;}
@@ -914,6 +944,55 @@ fn open_requests(app: &tauri::AppHandle) {
 mod diagnostic_tests {
     use super::file_call_error;
     use serde_json::json;
+
+    #[cfg(any(windows, target_os="macos"))]
+    #[tokio::test]
+    async fn real_rdp_preview_crosses_sender_and_rpc_without_relaxing_other_actions() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let mut frame = Vec::new();
+        for field in [1u32, 320, 180] { frame.extend_from_slice(&field.to_le_bytes()); }
+        frame.resize(12 + 320*180*4, 255);
+        let pixels = crate::rdp_workspace::history_preview(&frame).unwrap();
+        let action = json!({"action":"rdp_preview","peer":"device","rdp_profile":"scope","rdp_preview":pixels});
+        let body = super::encode_file_action(&action).expect("real thumbnail must pass the sender's request limit");
+        assert!(body.len() > 8192);
+        assert!(body.len() < 256*1024);
+        let (rpc, peer) = rpc_fixture();
+        let mut guard = Some(rpc);
+        let responder = tokio::spawn(async move {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap(), action);
+            peer.get_mut().write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+        assert_eq!(super::exchange_file_rpc(&mut guard, &body, Some(std::time::Duration::from_secs(5))).await.unwrap(), json!({"ok":true}));
+        responder.await.unwrap();
+        assert!(super::encode_file_action(&json!({"action":"rdp_record","rdp_name":"x".repeat(9000)})).is_err());
+        assert!(super::encode_file_action(&json!({"action":"rdp_preview","rdp_preview":"x".repeat(256*1024)})).is_err());
+    }
+
+    #[tokio::test]
+    async fn real_ssh_preview_crosses_sender_and_rpc_without_relaxing_other_actions() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let pixels = format!("c06c{}", "112233ff".repeat(192 * 108));
+        let action = json!({"action":"ssh_preview","peer":"device","rdp_profile":"scope","rdp_account":"user","ssh_port":22,"ssh_preview":pixels});
+        let body = super::encode_file_action(&action).expect("SSH thumbnail must pass the sender limit");
+        assert!(body.len() > 8192 && body.len() < 256 * 1024);
+        let (rpc, peer) = rpc_fixture();
+        let mut guard = Some(rpc);
+        let responder = tokio::spawn(async move {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap(), action);
+            peer.get_mut().write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+        assert_eq!(super::exchange_file_rpc(&mut guard, &body, Some(std::time::Duration::from_secs(5))).await.unwrap(), json!({"ok":true}));
+        responder.await.unwrap();
+        assert!(super::encode_file_action(&json!({"action":"ssh_record","rdp_name":"x".repeat(9000)})).is_err());
+        assert!(super::encode_file_action(&json!({"action":"ssh_preview","ssh_preview":"x".repeat(256*1024)})).is_err());
+    }
 
     fn rpc_fixture() -> (super::Rpc, tokio::io::DuplexStream) {
         let (client, server) = tokio::io::duplex(128);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-set-login-window"
+description = "Enables the desktop_set_login_window command without any pre-configured scope."
+commands.allow = ["desktop_set_login_window"]
+
+[[permission]]
+identifier = "deny-desktop-set-login-window"
+description = "Denies the desktop_set_login_window command without any pre-configured scope."
+commands.deny = ["desktop_set_login_window"]

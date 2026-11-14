@@ -17,6 +17,7 @@
 mod daemon;
 mod tray;
 mod appearance;
+mod login_window;
 mod tray_locale;
 mod files;
 #[cfg(any(windows, target_os = "macos"))]
@@ -128,9 +129,9 @@ fn main() {
     log::info!("builder: creating");
     let app = tauri::Builder::default();
     #[cfg(any(windows, target_os = "macos"))]
-    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme, ssh::ssh_session, ssh::ssh_read, remote_workspace::remote_workspace, remote_workspace::remote_frame]);
+    let app = app.invoke_handler(tauri::generate_handler![product_info, login_window::desktop_set_login_window, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme, ssh::ssh_session, ssh::ssh_read, remote_workspace::remote_workspace, remote_workspace::remote_frame]);
     #[cfg(not(any(windows, target_os = "macos")))]
-    let app = app.invoke_handler(tauri::generate_handler![product_info, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme]);
+    let app = app.invoke_handler(tauri::generate_handler![product_info, login_window::desktop_set_login_window, files::files_action, files::file_receipt_action, tray::tray_action, tray::tray_set_locale, appearance::desktop_set_theme]);
     log::info!("builder: +single_instance");
     let app = app.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
         log::info!("single_instance: second launch detected, focusing existing");
@@ -155,6 +156,7 @@ fn main() {
     log::info!("builder: +setup");
     let app = app.setup(move |app| {
             log::info!("setup: starting");
+            app.manage(login_window::LoginWindow::default());
             // Resolve + create the supervisor here (not in main) so we can ask
             // Tauri for a writable per-user dir to extract the embedded daemon
             // into. The daemon is baked into THIS exe (build.rs include_bytes);
@@ -191,8 +193,8 @@ fn main() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Calabi")
-            .inner_size(1100.0, 720.0)
-            .min_inner_size(880.0, 560.0)
+            .inner_size(420.0, 600.0)
+            .min_inner_size(360.0, 360.0)
             .resizable(true)
             .maximizable(true)
             .visible(false)
