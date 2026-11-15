@@ -23,7 +23,10 @@ use windows_sys::Win32::{
     },
     System::{
         Pipes::GetNamedPipeServerProcessId,
-        RemoteDesktop::ProcessIdToSessionId,
+        RemoteDesktop::{
+            ProcessIdToSessionId, WTSActive, WTSConnectState, WTSFreeMemory,
+            WTSQuerySessionInformationW,
+        },
         Threading::{GetCurrentProcess, CREATE_NO_WINDOW},
     },
 };
@@ -139,6 +142,41 @@ fn session_id(pid: u32) -> io::Result<u32> {
 }
 
 pub(super) fn start(binary: &Path) -> io::Result<()> {
+    start_when_active(binary, current_session_active()?)
+}
+
+pub(super) fn current_session_active() -> io::Result<bool> {
+    let session = session_id(std::process::id())?;
+    if session == 0 {
+        return Ok(false);
+    }
+    unsafe {
+        let mut buffer = null_mut();
+        let mut size = 0;
+        if WTSQuerySessionInformationW(null_mut(), session, WTSConnectState, &mut buffer, &mut size)
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let active = !buffer.is_null()
+            && size as usize >= std::mem::size_of::<i32>()
+            && *buffer.cast::<i32>() == WTSActive;
+        if !buffer.is_null() {
+            WTSFreeMemory(buffer.cast());
+        }
+        Ok(active)
+    }
+}
+
+fn start_when_active(binary: &Path, active: bool) -> io::Result<()> {
+    // Disconnected Windows sessions have no broker pipe. Do not interpret that
+    // as a missing agent and create another process on every background poll.
+    if !active {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "File agent startup deferred while the Windows user session is disconnected",
+        ));
+    }
     // The login task and the desktop only launch the agent. Its lifetime is
     // managed by the Windows user session and is independent of either caller.
     std::process::Command::new(binary)
@@ -196,6 +234,20 @@ mod tests {
         Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
         SECURITY_ATTRIBUTES,
     };
+
+    #[test]
+    fn inactive_session_never_attempts_to_launch_an_agent() {
+        let missing =
+            std::env::temp_dir().join(format!("missing-calabi-agent-{}.exe", uuid::Uuid::new_v4()));
+        assert_eq!(
+            start_when_active(&missing, false).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            start_when_active(&missing, true).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
 
     fn fixture() -> Endpoint {
         let mut endpoint = Endpoint::current().unwrap();

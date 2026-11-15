@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "calabi-desktop"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "cc",
  "env_logger",
@@ -517,7 +517,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "webview2-com",
  "which",
+ "windows",
  "windows-sys 0.61.2",
  "zeroize",
 ]

@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.1 — 2026-11-15
+
+- **Fixed:** Disconnected Windows user sessions no longer accumulate file-agent processes. Duplicate agents exit before waiting for a session to reconnect.
+- **Fixed:** Closing remote sessions releases their thumbnail and file-panel caches; late preview callbacks cannot restore closed-session data.
+- **Added:** Bounded Windows memory and WebView failure diagnostics help investigate resource exhaustion without recording credentials or remote screen contents.
+- **Changed:** Desktop registration reports the application type and version separately from the bundled core version.
+
+Install over the existing desktop application to retain device identity, credentials and preferences. The bundled core remains 2.8.0 with an updated source commit. Windows x64 and macOS universal installers are updated; standalone core packages and their update channel are unchanged.
+
 ## 3.1.0 — 2026-11-14
 
 - **Added:** Recent Remote cards display locally saved Windows desktop and Linux SSH terminal thumbnails. Session switching also shows current SSH terminal contents.

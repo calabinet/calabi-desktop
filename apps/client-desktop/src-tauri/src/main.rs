@@ -36,6 +36,8 @@ mod ssh_auth;
 #[path = "ssh_auth_macos.rs"]
 mod ssh_auth;
 mod file_requests;
+#[cfg(windows)]
+mod diagnostics;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -140,6 +142,8 @@ fn main() {
             let _ = w.set_focus();
         }
     }));
+    #[cfg(windows)]
+    let app = app.plugin(diagnostics::init());
     log::info!("builder: +shell");
     let app = app.plugin(tauri_plugin_shell::init());
     log::info!("builder: +opener");
