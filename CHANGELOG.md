@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0 — 2026-11-21
+
+- **Added:** Request a substitute address for a single host on an advertised subnet.
+- **Changed:** The overview adapts to wide windows and shows 30-day traffic history when space allows.
+- **Changed:** Take over an endpoint managed by another device before editing it locally.
+- **Added:** The endpoint editor checks target reachability while you enter its address.
+
+This release bundles Calabi core 2.9.0. Upgrade the self-hosted coordinator to use per-host substitute addresses.
+
 ## 3.1.1 — 2026-11-15
 
 - **Fixed:** Disconnected Windows user sessions no longer accumulate file-agent processes. Duplicate agents exit before waiting for a session to reconnect.
