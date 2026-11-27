@@ -43,6 +43,14 @@ struct Target {
     host_key: String,
     host: Ipv4Addr,
     local: Ipv4Addr,
+    #[serde(default)]
+    ports: String,
+}
+
+impl Target {
+    fn permits_port(&self, port: u16) -> bool {
+        crate::files::permits_remote_login_port(&self.ports, Some(port))
+    }
 }
 
 struct Session {
@@ -332,6 +340,8 @@ async fn show_login(
             hint.and_then(|record| u16::try_from(record["port"].as_u64()?).ok())
                 .filter(|value| *value > 0)
         })
+        .filter(|port| target.permits_port(*port))
+        .or_else(|| target.ports.split(',').next()?.parse().ok())
         .unwrap_or(22);
     let mut command = Command::new(helper);
     command
@@ -483,6 +493,9 @@ async fn connect(
         use_saved,
         password,
     } = login;
+    if !target.permits_port(port) {
+        return Err("sshTargetUnavailable".into());
+    }
     let state = app.state::<Windows>();
     if let Some(existing) = existing_terminal(app, &target, peer, Some(&account), Some(port)) {
         return Ok((existing, None));
@@ -1009,6 +1022,7 @@ mod tests {
                 host_key: "b".repeat(64),
                 host: "100.64.0.2".parse().unwrap(),
                 local: "100.64.0.1".parse().unwrap(),
+                ports: String::new(),
             },
             account: "user@realm".into(),
             port: 2222,

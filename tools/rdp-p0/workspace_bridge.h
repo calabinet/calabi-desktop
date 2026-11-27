@@ -50,6 +50,24 @@ static unsigned char workspace_packet[8];
 static unsigned workspace_packet_size;
 #ifdef _WIN32
 static wchar_t workspace_active_path[32768];
+// The RDP worker owns both control-packet intake and display polling.
+static struct probe_display workspace_display;
+static ULONGLONG workspace_display_changed;
+
+int probe_display_snapshot(struct probe_display *out,uint64_t *age) {
+    if(!workspace_display.width)return 0;
+    *out=workspace_display;
+    *age=GetTickCount64()-workspace_display_changed;
+    return 1;
+}
+
+static void workspace_set_display(unsigned width,unsigned height,unsigned scale) {
+    struct probe_display next;
+    if(!probe_display_make_pixels(width,height,scale,&next) ||
+       probe_display_equal(&next,&workspace_display))return;
+    workspace_display=next;
+    workspace_display_changed=GetTickCount64();
+}
 #else
 static const char *workspace_active_path;
 #endif
@@ -311,6 +329,8 @@ static int workspace_input(struct probe_input *event) {
         }else if(probe_workspace_active() && kind==PROBE_RESIZE){
 #ifdef __APPLE__
             probe_workspace_display(a,b,workspace_u16(workspace_packet+6));
+#elif defined(_WIN32)
+            workspace_set_display(a,b,workspace_u16(workspace_packet+6));
 #endif
         }else if(probe_workspace_active() && kind<=PROBE_REFRESH){
             *event=(struct probe_input){(int)kind,(uint16_t)a,(uint16_t)b,(int16_t)workspace_u16(workspace_packet+6)};

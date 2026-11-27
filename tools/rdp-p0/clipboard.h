@@ -12,6 +12,8 @@
 #define PROBE_FORMAT_FILES 0xc001u
 #define PROBE_FORMAT_BRIDGE 0xc002u
 #define PROBE_FORMAT_PNG 0xc004u
+#define PROBE_FORMAT_HTML 0xc005u
+#define PROBE_HTML_FORMAT_NAME "HTML Format"
 // The first workspace selection sampled the local revision without exporting it.
 #define PROBE_CLIPBOARD_INITIAL_SELECTION 4
 // UTF-16LE including the terminating zero. Caller owns returned memory.

@@ -49,7 +49,7 @@ def paths(product):
     common = ["README.md", "CHANGELOG.md", "apps/client-" + product, "scripts/products/product.py", "scripts/products/publish-release.py", "scripts/updatekit", "scripts/dev/build.ps1",
               "scripts/dev/build-cache.ps1", "scripts/dev/build-cache-policy.psd1", "scripts/dev/build-guard.sh"]
     if product == "android":
-        return common + ["scripts/mobile"]
+        return common + ["scripts/mobile", "tools/rdp-p0/copy_binding_channel.h"]
     return common + ["tools/rdp-p0", "tools/rdp-finder-menu", "scripts/build-desktop.ps1",
                      "scripts/build-desktop.sh", "scripts/gen-desktop-icons.ps1", "scripts/gen-desktop-icons.sh",
                      "scripts/bundle-macos-rdp.sh", "scripts/verify-macos-rdp-bundle.sh",

@@ -10,10 +10,15 @@ static int progressState;
 void probe_files_progress(uint64_t d,uint64_t t,int s){(void)d;(void)t;progressState=s;}
 #include "windows_clipboard.h"
 
-static void put_clip(UINT format,const void *bytes,size_t size) {
+static void add_clip(UINT format,const void *bytes,size_t size) {
     HGLOBAL data=GlobalAlloc(GMEM_MOVEABLE,size);assert(data);
     void *p=GlobalLock(data);assert(p);memcpy(p,bytes,size);GlobalUnlock(data);
-    assert(OpenClipboard(window));assert(EmptyClipboard());assert(SetClipboardData(format,data));CloseClipboard();
+    assert(SetClipboardData(format,data));
+}
+static void put_clip(UINT format,const void *bytes,size_t size) {
+    assert(OpenClipboard(window));assert(EmptyClipboard());
+    add_clip(format,bytes,size);
+    CloseClipboard();
 }
 int main(void) {
     // Clipboard belongs to the window station, not the desktop. Never use the user's clipboard.
@@ -30,6 +35,27 @@ int main(void) {
     BYTE dib[48]={0};clip_put32(dib,40);clip_put32(dib+4,2);clip_put32(dib+8,1);dib[12]=1;dib[14]=24;dib[42]=255;
     seq=GetClipboardSequenceNumber();assert(probe_clipboard_write(dib,sizeof(dib),PROBE_FORMAT_DIB,seq,&after));
     seq=UINT64_MAX;assert(probe_clipboard_read(&data,&n,&fmt,&seq) && fmt==PROBE_FORMAT_DIB && n==48 && !memcmp(data,dib,n));free(data);
+    const uint8_t fragment[]="<TABLE><TR><TD>42</TD><TD>8</TD></TR></TABLE>";
+    size_t htmlLength=0;
+    uint8_t *html=clip_wrap_html_table(fragment,sizeof(fragment)-1,&htmlLength);
+    assert(html);
+    const wchar_t cells[]=L"42\t8\r\n16\t4";
+    assert(OpenClipboard(window));assert(EmptyClipboard());
+    add_clip(CF_DIB,dib,sizeof(dib));
+    add_clip(CF_UNICODETEXT,cells,sizeof(cells));
+    add_clip(RegisterClipboardFormatW(L"HTML Format"),html,htmlLength);
+    CloseClipboard();
+    assert(probe_clipboard_read(&data,&n,&fmt,&seq) && fmt==PROBE_FORMAT_HTML);
+    assert(clip_html_size(data,n)==htmlLength && n==4+htmlLength+sizeof(cells));
+    assert(!memcmp(data+4,html,htmlLength) && !memcmp(data+4+htmlLength,cells,sizeof(cells)));
+    free(html);
+    free(data);
+    assert(OpenClipboard(window));assert(EmptyClipboard());
+    add_clip(CF_DIB,dib,sizeof(dib));
+    add_clip(CF_UNICODETEXT,cells,sizeof(cells));
+    CloseClipboard();
+    assert(probe_clipboard_read(&data,&n,&fmt,&seq) && fmt==PROBE_FORMAT_TEXT);
+    assert(n==sizeof(cells) && !memcmp(data,cells,n));free(data);
     // Snipping-tool-style top-down DIBV5 with explicit BGRA masks.
     BYTE screenshot[140]={0};clip_put32(screenshot,124);clip_put32(screenshot+4,2);clip_put32(screenshot+8,(uint32_t)-2);
     screenshot[12]=1;screenshot[14]=32;clip_put32(screenshot+16,3);
@@ -102,6 +128,6 @@ int main(void) {
     seq=UINT64_MAX;assert(probe_clipboard_read(&data,&n,&fmt,&seq)==3 && !data && !n);
     DestroyWindow(window);window=NULL;assert(SetProcessWindowStation(original));
     assert(SetThreadDesktop(originalDesk));CloseDesktop(desktop);CloseWindowStation(station);
-    puts("Windows isolated clipboard text/image/files fixtures passed (43 MiB, Unicode, empty, cancel, stale, quota, copy-out).");
+    puts("Windows isolated clipboard table/text/image/files fixtures passed (43 MiB, Unicode, empty, cancel, stale, quota, copy-out).");
     return 0;
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.0 — 2026-11-26
+
+- **Added:** Network and NAT diagnostics in the Tools page (with a quick link from Mesh) showing NAT1–NAT4 classification, peer-to-peer hole-punching status, and local, mesh, and default-masked external IP addresses.
+- **Added:** Remote Desktop audio playback and dynamic display resolution / 4K scaling on Windows.
+- **Added:** Authorized cross-member remote login and file-copy support across mesh devices.
+- **Fixed:** File transfers now tolerate up to ±5 minutes of clock skew between sender and receiver devices.
+- **Fixed:** Sign-in window sizing adapts to Windows display text scaling and fits the login panel cleanly.
+- **Fixed:** Additional remote desktop keyboard shortcuts and Excel spreadsheet clipboard paste handling.
+
+Install over the existing desktop application to retain device identity, credentials and preferences. This release bundles Calabi core 2.10.0.
+
 ## 3.2.0 — 2026-11-21
 
 - **Added:** Request a substitute address for a single host on an advertised subnet.

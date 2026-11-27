@@ -83,6 +83,9 @@ static UINT list_sent(CliprdrClientContext *channel, const CLIPRDR_FORMAT_LIST *
     if (nativeFormat == PROBE_FORMAT_PNG && list->numFormats) {
         assert(list->numFormats == 2 && !strcmp(list->formats[0].formatName, "PNG"));
         assert(list->formats[1].formatId == CF_DIB && !list->formats[1].formatName);
+    } else if (nativeFormat == PROBE_FORMAT_HTML && list->numFormats) {
+        assert(list->numFormats == 2 && !strcmp(list->formats[0].formatName, "HTML Format"));
+        assert(list->formats[1].formatId == CF_UNICODETEXT && !list->formats[1].formatName);
     } else {
         assert(list->numFormats <= 1);
     }
@@ -218,6 +221,40 @@ int main(void) {
     data_request(&channel, &get);
     assert(lastFlags == CB_RESPONSE_OK && lastLength == sizeof(dib) &&
            !memcmp(lastPayload, dib, sizeof(dib)));
+    static const BYTE tableFragment[] = "<TABLE><TR><TD STYLE=\"font-weight:bold\">中文</TD><TD>8</TD></TR></TABLE>";
+    static const BYTE tableText[] = {'4',0,'2',0,'\t',0,'8',0,0,0};
+    size_t tableHtmlSize = 0;
+    BYTE *tableHtml = clip_wrap_html_table(tableFragment, sizeof(tableFragment)-1, &tableHtmlSize);
+    assert(tableHtml);
+    unsigned startHtml, endHtml, startFragment, endFragment;
+    assert(sscanf((const char *)tableHtml,
+                  "Version:1.0\r\nStartHTML:%u\r\nEndHTML:%u\r\nStartFragment:%u\r\nEndFragment:%u",
+                  &startHtml, &endHtml, &startFragment, &endFragment) == 4);
+    assert(startHtml < startFragment && endFragment < endHtml && endHtml + 1 == tableHtmlSize);
+    assert(endFragment - startFragment == sizeof(tableFragment)-1 &&
+           !memcmp(tableHtml + startFragment, tableFragment, sizeof(tableFragment)-1));
+    size_t packedSize = 0;
+    BYTE *packed = clip_pack_html(tableHtml, tableHtmlSize-1, tableText, sizeof(tableText), &packedSize);
+    assert(packed && packedSize <= sizeof(nativeText));
+    assert(clip_html_size(packed, 4 + tableHtmlSize-1) == 0);
+    memcpy(nativeText, packed, packedSize);
+    free(packed);
+    nativeLength = packedSize;
+    nativeFormat = PROBE_FORMAT_HTML;
+    nativeSequence++;
+    poll_now();
+    get.requestedFormatId = PROBE_FORMAT_HTML;
+    data_request(&channel, &get);
+    assert(lastFlags == CB_RESPONSE_OK && lastLength == tableHtmlSize &&
+           !memcmp(lastPayload, tableHtml, tableHtmlSize));
+    free(tableHtml);
+    get.requestedFormatId = CF_UNICODETEXT;
+    data_request(&channel, &get);
+    assert(lastFlags == CB_RESPONSE_OK && lastLength == sizeof(tableText) &&
+           !memcmp(lastPayload, tableText, sizeof(tableText)));
+    get.requestedFormatId = CF_DIB;
+    data_request(&channel, &get);
+    assert(lastFlags == CB_RESPONSE_FAIL && lastLength == 0);
     // File descriptors use wire offsets, never native struct layout.
     BYTE descriptors[4+CLIP_DESCRIPTOR_SIZE]={0};clip_put32(descriptors,1);
     BYTE *d=descriptors+4;clip_put32(d,0x44);clip_put32(d+36,0x80);clip_put32(d+68,4);d[72]='a';

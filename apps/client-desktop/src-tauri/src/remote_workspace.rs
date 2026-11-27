@@ -72,8 +72,11 @@ impl Entry {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 fn sync_rdp_viewport(window: &WebviewWindow) {
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
     let workspace = window.state::<Workspace>();
     let rdp = workspace.state.lock().unwrap().active_rdp();
     let Some(rdp) = rdp else { return };
@@ -87,13 +90,22 @@ fn sync_rdp_viewport(window: &WebviewWindow) {
     if !scale.is_finite() || scale < 1.0 {
         return;
     }
-    let logical = size.to_logical::<f64>(scale);
-    if logical.width < 1.0 || logical.height < 1.0 {
+    #[cfg(target_os = "macos")]
+    let (width, height) = {
+        let logical = size.to_logical::<f64>(scale);
+        (logical.width.round() as u32, logical.height.round() as u32)
+    };
+    #[cfg(windows)]
+    let (width, height) = (size.width, size.height);
+    let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) else {
+        return;
+    };
+    if width == 0 || height == 0 {
         return;
     }
     rdp.resize(
-        logical.width.round() as u16,
-        logical.height.round() as u16,
+        width,
+        height,
         (scale * 100.0).round().clamp(100.0, 500.0) as i16,
         fullscreen,
     );
@@ -205,7 +217,7 @@ pub async fn add(
         let generation = workspace.generation.fetch_add(1, Ordering::Relaxed) + 1;
         workspace.state.lock().unwrap().generation = generation;
         window.on_window_event(move |event| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(windows, target_os = "macos"))]
             if matches!(
                 event,
                 tauri::WindowEvent::Resized(_)
@@ -324,7 +336,7 @@ pub fn select(window: &WebviewWindow, id: &str) -> Result<(), String> {
         name
     };
     let _ = window.set_title(&format!("Calabi · {name}"));
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     sync_rdp_viewport(window);
     Ok(())
 }

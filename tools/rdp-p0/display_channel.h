@@ -54,9 +54,15 @@ static void display_disconnected(void *context,const ChannelDisconnectedEventArg
 }
 static BOOL display_initialize(rdpSettings *settings) {
     memset(&display,0,sizeof(display));InitializeCriticalSection(&display.lock);display.initialized=TRUE;
+#ifdef _WIN32
+    const wchar_t *path=_wgetenv(L"CALABI_RDP_DISPLAY_LOG");display.log=path?_wfopen(path,L"a"):NULL;
+    const unsigned defaultWidth=1920,defaultHeight=1080;
+#else
     const char *path=getenv("CALABI_RDP_DISPLAY_LOG");display.log=path?fopen(path,"a"):NULL;
+    const unsigned defaultWidth=1024,defaultHeight=576;
+#endif
     struct probe_display initial;uint64_t age;
-    if(!probe_display_snapshot(&initial,&age) && !probe_display_make(1024,576,1,&initial))return FALSE;
+    if(!probe_display_snapshot(&initial,&age) && !probe_display_make(defaultWidth,defaultHeight,1,&initial))return FALSE;
     display.requestedScale=initial.desktop_scale;
     display.maxSide=PROBE_DISPLAY_MAX_SIDE;
 #ifdef CALABI_REMOTE_WORKSPACE

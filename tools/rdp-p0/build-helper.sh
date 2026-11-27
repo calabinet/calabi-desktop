@@ -44,7 +44,11 @@ if [[ $run_tests -eq 1 ]]; then
   "${cc[@]}" -std=c11 -Wall -Wextra "$src/display_layout_test.c" -o "$tmp/display-layout-test"
   "$tmp/display-layout-test" >&2
   "${cc[@]}" -std=c11 "${cflags[@]}" "$src/display_channel_test.c" "${libs[@]}" -o "$tmp/display-channel-test"
-  WLOG_LEVEL=OFF "$tmp/display-channel-test" >&2
+  if [[ $# -eq 0 ]]; then
+    WLOG_LEVEL=OFF "$tmp/display-channel-test" >&2
+  else
+    WLOG_LEVEL=OFF "$tmp/display-channel-test" --require-audio >&2
+  fi
   "${cc[@]}" -std=c11 "${cflags[@]}" "$src/gfx_channel_test.c" "${libs[@]}" -o "$tmp/gfx-channel-test"
   if [[ $# -eq 0 ]]; then
     WLOG_LEVEL=OFF "$tmp/gfx-channel-test" >&2

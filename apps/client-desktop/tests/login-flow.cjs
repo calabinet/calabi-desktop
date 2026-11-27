@@ -64,10 +64,31 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const submit=()=>evaluate(`document.querySelector('button[type=submit]').click()`);
   for(const lang of ['en','zh-CN','zh-TW','de','es','fr','it','ja','ko','pt'])for(const theme of ['light','dark']){
    authed=false;requests=[];
-   await call('Emulation.setDeviceMetricsOverride',{width:420,height:600,deviceScaleFactor:1,mobile:false});
+   await call('Emulation.setDeviceMetricsOverride',{width:380,height:510,deviceScaleFactor:2,mobile:false});
    const init=`localStorage.clear();localStorage.setItem('calabi_lang',${JSON.stringify(lang)});localStorage.setItem('i18nextLng',${JSON.stringify(lang)});localStorage.setItem('calabi.client.theme',${JSON.stringify(theme)});window.__loginSizes=[];window.__TAURI_INTERNALS__={invoke:async(command,args)=>{if(command==='desktop_set_login_window'){window.__loginSizes.push(args);return;}return command==='product_info'?{product:'desktop',version:'3.0.1',bundled_core_version:'2.8.0'}:${JSON.stringify(files)}}};`;
    const {identifier}=await call('Page.addScriptToEvaluateOnNewDocument',{source:init});await call('Page.navigate',{url:base+'/?lang='+lang+'&appearance='+theme+'#/login'});
    await waitFor(`!!document.querySelector('#email')&&window.__loginSizes.some(x=>x.compact)`);
+   const panel=await evaluate(`(()=>{const r=document.querySelector('.ant-card').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight}})()`);
+   if(panel.x!==0||panel.y!==0||panel.width!==panel.viewportWidth||panel.height!==panel.viewportHeight)throw new Error(JSON.stringify({lang,theme,panel}));
+   await call('Emulation.setDeviceMetricsOverride',{width:253,height:340,deviceScaleFactor:2,mobile:false});
+   await waitFor(`innerWidth===253&&!!document.querySelector('button .anticon-cloud-server')&&!!document.querySelector('a[href$="?mode=register"]')`);
+   const scaled=await evaluate(`(()=>{
+    const pane=document.querySelector('.desktop-login');
+    const register=pane.querySelector('a[href$="?mode=register"]');
+    register.focus();
+    const bounds=register.getBoundingClientRect();
+    const viewport=pane.getBoundingClientRect();
+    const focused=document.activeElement===register&&bounds.top>=viewport.top&&bounds.bottom<=viewport.bottom;
+    const result={focused,scroll:pane.scrollTop,horizontal:pane.scrollWidth>pane.clientWidth,documentScroll:document.documentElement.scrollTop};
+    pane.querySelector('#email').focus();
+    return result;
+   })()`);
+   if(!scaled.focused||!scaled.scroll||scaled.horizontal||scaled.documentScroll)throw new Error(JSON.stringify({lang,theme,scaled}));
+   await call('Emulation.setDeviceMetricsOverride',{width:380,height:510,deviceScaleFactor:2,mobile:false});
+   if(lang==='zh-CN'&&theme==='dark'&&process.env.CALABI_LOGIN_PREVIEW){
+    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    fs.writeFileSync(process.env.CALABI_LOGIN_PREVIEW,Buffer.from(shot.data,'base64'));
+   }
    await fill('#email','test@example.com');await fill('#password','bad-pass');await submit();
    await waitFor(`!!document.querySelector('.ant-alert-error')`);
    if(await evaluate(`!!document.querySelector('#totp_code')`))throw new Error('wrong password opened MFA');
@@ -80,19 +101,19 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
    if(await evaluate(`!!document.querySelector('.ant-alert')||!!document.querySelector('#totp_code')`))throw new Error('back did not reset');
    await submit();await waitFor(`!!document.querySelector('#totp_code')`);
    if(!await evaluate(`window.__loginSizes.length===1&&window.__loginSizes[0].compact&&!('height' in window.__loginSizes[0])`))throw new Error('Login steps changed window geometry');
-   const state=await evaluate(`({theme:document.documentElement.dataset.theme,over:document.documentElement.scrollWidth>420,vertical:document.documentElement.scrollHeight>innerHeight,passwordFields:document.querySelectorAll('input[type=password]').length,sizes:window.__loginSizes,missingText:/login\.(totpTitle|totpSub|totpSubmit|back)/.test(document.body.innerText)})`);
+   const state=await evaluate(`({theme:document.documentElement.dataset.theme,over:document.documentElement.scrollWidth>innerWidth,vertical:document.documentElement.scrollHeight>innerHeight,passwordFields:document.querySelectorAll('input[type=password]').length,sizes:window.__loginSizes,missingText:/login\.(totpTitle|totpSub|totpSubmit|back)/.test(document.body.innerText)})`);
    if(state.over||state.vertical||state.passwordFields||state.missingText)throw new Error(JSON.stringify(state));
    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(output,`totp-${lang}-${theme}.png`),Buffer.from(shot.data,'base64'));
    await fill('#totp_code','123456');await submit();await waitFor(`location.hash.includes('overview')&&window.__loginSizes.some(x=>!x.compact)`);
    const last=requests.at(-1);if(last.identifier!=='test@example.com'||last.password!=='test-pass'||last.totp_code!=='123456')throw new Error('MFA resubmit lost credentials');
    if(await evaluate(`Object.values(localStorage).some(v=>v.includes('test-pass'))||Object.values(sessionStorage).some(v=>v.includes('test-pass'))`))throw new Error('persisted password');
    const twoFactorRequests=requests.length;authed=false;
-   await call('Page.navigate',{url:base+'/?lang='+lang+'&appearance='+theme+'#/login'});
+   await call('Page.navigate',{url:base+'/?lang='+lang+'&appearance='+theme+'&flow=password#/login'});
    await waitFor(`!!document.querySelector('#email')&&window.__loginSizes.some(x=>x.compact)`);
    await fill('#email','test@example.com');await fill('#password','plain-pass');await submit();
    await waitFor(`location.hash.includes('overview')&&window.__loginSizes.some(x=>!x.compact)`);
-   results.push({lang,theme,passed:true,loginRequests:twoFactorRequests,withoutTwoFactor:true,...state});await call('Page.removeScriptToEvaluateOnNewDocument',{identifier});
+   results.push({lang,theme,passed:true,loginRequests:twoFactorRequests,withoutTwoFactor:true,scaled,...state});await call('Page.removeScriptToEvaluateOnNewDocument',{identifier});
   }
-  fs.writeFileSync(report,JSON.stringify({viewport:{width:1100,height:720,dpr:2},results,unknown:[...unknown]},null,2)+'\n');console.log(JSON.stringify({scenarios:results.length,compactWidth:420,report,unknown:[...unknown]}));
+  fs.writeFileSync(report,JSON.stringify({viewport:{width:380,height:510,dpr:2},scaledViewport:{width:253,height:340,dpr:2},results,unknown:[...unknown]},null,2)+'\n');console.log(JSON.stringify({scenarios:results.length,compactWidth:380,report,unknown:[...unknown]}));
  }finally{if(socket){socket.send(JSON.stringify({id:999999,method:'Browser.close'}));await sleep(1000);socket.close()}chrome.kill();await sleep(300);try{fs.rmSync(profile,{recursive:true,force:true});fs.rmSync(output,{recursive:true,force:true})}catch{}server.close()}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close()});

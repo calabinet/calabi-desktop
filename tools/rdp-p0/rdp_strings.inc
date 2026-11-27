@@ -27,6 +27,9 @@ RDP_MESSAGE(AllowClipboard,
 RDP_MESSAGE(AllowFiles,
     "Allow file copying (up to 100 MiB)", "允许复制文件（最多 100 MiB）", "允許複製檔案（最多 100 MiB）", "ファイルのコピーを許可（最大 100 MiB）", "파일 복사 허용(최대 100 MiB)",
     "Dateien kopieren erlauben (bis 100 MiB)", "Autoriser la copie de fichiers (100 Mio max.)", "Permitir copiar archivos (hasta 100 MiB)", "Consenti la copia di file (max 100 MiB)", "Permitir copiar arquivos (até 100 MiB)")
+RDP_MESSAGE(PlayRemoteAudio,
+    "Play remote audio on this device", "在此设备播放远程声音", "在此裝置播放遠端音訊", "このデバイスでリモート音声を再生", "이 기기에서 원격 오디오 재생",
+    "Remoteton auf diesem Gerät abspielen", "Lire l’audio distant sur cet appareil", "Reproducir audio remoto en este dispositivo", "Riproduci l’audio remoto su questo dispositivo", "Reproduzir áudio remoto neste dispositivo")
 RDP_MESSAGE(Remember,
     "Remember password on this device", "在此设备记住密码", "在此裝置記住密碼", "このデバイスにパスワードを保存", "이 기기에 비밀번호 저장",
     "Passwort auf diesem Gerät speichern", "Mémoriser le mot de passe sur cet appareil", "Recordar contraseña en este dispositivo", "Ricorda la password su questo dispositivo", "Lembrar senha neste dispositivo")

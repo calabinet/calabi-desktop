@@ -14,3 +14,4 @@
 #define IDC_FORGET 213
 #define IDC_PORT_LABEL 214
 #define IDC_PORT 215
+#define IDC_AUDIO 216

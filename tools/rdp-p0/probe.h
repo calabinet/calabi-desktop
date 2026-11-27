@@ -1,14 +1,14 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-#ifdef __APPLE__
+#if defined(__APPLE__) || (defined(_WIN32) && defined(CALABI_REMOTE_WORKSPACE))
 #include "display_layout.h"
-// Thread-safe AppKit snapshot; age is milliseconds since the latest layout change.
+// Latest platform viewport; age is milliseconds since the last layout change.
 int probe_display_snapshot(struct probe_display *display,uint64_t *age);
 #endif
 
 // Called on the worker thread. AppKit state is accessed on the main thread.
-int probe_verify_leaf(const uint8_t *pem, size_t length);
+int probe_verify_leaf(const uint8_t *pem, size_t length, uint16_t port);
 void probe_frame(const uint8_t *pixels, int width, int height, unsigned stride);
 enum probe_input_kind { PROBE_TEXT = 1, PROBE_SCAN, PROBE_MOVE, PROBE_LEFT_DOWN, PROBE_LEFT_UP,
                         PROBE_RIGHT_DOWN, PROBE_RIGHT_UP, PROBE_WHEEL, PROBE_HWHEEL,
@@ -19,7 +19,7 @@ enum { PROBE_RECONNECT_LIMIT = 6, PROBE_RECONNECT_EXHAUSTED = -3 };
 int probe_requested_stop(void);
 void probe_reconnecting(unsigned attempt);
 enum { PROBE_RDP_DEFAULT_PORT = 3389 };
-int probe_connect(const char *host, uint16_t port, const char *domain, const char *user, const char *password);
+int probe_connect(const char *host, uint16_t port, const char *domain, const char *user, const char *password, int play_audio);
 #ifdef CALABI_REMOTE_WORKSPACE
 int probe_workspace_enabled(void);
 int probe_workspace_active(void);

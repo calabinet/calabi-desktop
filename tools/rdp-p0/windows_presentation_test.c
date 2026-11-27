@@ -9,7 +9,7 @@ void probe_frame(const uint8_t *src,int w,int h,unsigned stride) {
     memcpy(displayed,src,sizeof(displayed));
     presents++;
 }
-int probe_verify_leaf(const uint8_t *p,size_t n){return 0;}
+int probe_verify_leaf(const uint8_t *p,size_t n,uint16_t port){return 0;}
 int probe_next_input(struct probe_input *e){return 0;}
 void windows_waiting_for_frame(void){}
 int probe_requested_stop(void){return 0;}
@@ -98,6 +98,18 @@ static void check_background_graphics(rdpContext *context) {
 #endif
 
 int main(void){
+#ifdef CALABI_REMOTE_WORKSPACE
+    struct probe_display layout;
+    uint64_t age;
+    assert(!probe_display_snapshot(&layout,&age));
+    workspace_set_display(3840,2160,175);
+    assert(probe_display_snapshot(&layout,&age));
+    assert(layout.width==3840 && layout.height==2160 && layout.desktop_scale==175);
+    workspace_set_display(0,0,100);
+    assert(probe_display_snapshot(&layout,&age) && layout.width==3840);
+    workspace_set_display(1600,1000,125);
+    assert(probe_display_snapshot(&layout,&age) && layout.width==1600 && layout.height==1000);
+#endif
     assert(next_reconnect_attempt(0,TRUE,FALSE,0)==0);
     assert(next_reconnect_attempt(0,TRUE,TRUE,0)==1);
     for(unsigned i=1;i<PROBE_RECONNECT_LIMIT;i++)

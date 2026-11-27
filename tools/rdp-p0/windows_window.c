@@ -60,6 +60,7 @@ static char host[32],username[2048],domain[1024],password[2048];
 static char accountLabel[2048];
 static wchar_t credentialKey[65],credentialTarget[1024];
 static BOOL rememberPassword,usedSavedPassword,loginRecorded;
+static BOOL playRemoteAudio;
 static uint16_t rdpPort=PROBE_RDP_DEFAULT_PORT;
 
 static unsigned login_port(HWND dlg) {
@@ -149,7 +150,7 @@ static void layout_login_buttons(HWND dlg) {
 
 static void shift_login_footer(HWND dlg,int units) {
     RECT offset={0,0,0,units};MapDialogRect(dlg,&offset);
-    const int ids[]={IDC_FILES,IDC_REMEMBER,IDC_FORGET,IDCANCEL,IDOK};
+    const int ids[]={IDC_FILES,IDC_AUDIO,IDC_REMEMBER,IDC_FORGET,IDCANCEL,IDOK};
     for(unsigned i=0;i<ARRAYSIZE(ids);i++){
         HWND control=GetDlgItem(dlg,ids[i]);
         RECT rect;GetWindowRect(control,&rect);
@@ -203,7 +204,7 @@ static void record_login(void) {
     if(credentialKey[0])rdp_record_login(accountLabel,rdpPort);
 }
 
-int probe_verify_leaf(const uint8_t *pem,size_t length) {
+int probe_verify_leaf(const uint8_t *pem,size_t length,uint16_t port) {
     static const char end[]="-----END CERTIFICATE-----";
     char *chain=NULL, *first=NULL, *last=NULL;
     BYTE *der=NULL,hash[32];
@@ -220,7 +221,9 @@ int probe_verify_leaf(const uint8_t *pem,size_t length) {
         !CryptHashCertificate2(L"SHA256",0,NULL,der,bytes,hash,&hashBytes) || hashBytes!=32) goto done;
     for(unsigned i=0;i<32;i++) snprintf(actual+2*i,3,"%02X",hash[i]);
     AcquireSRWLockExclusive(&copyPipeLock);
-    fprintf(stdout,"rdp-pin %s\n",actual); fflush(stdout);
+    if (getenv("CALABI_RDP_REPORT_PORT")) fprintf(stdout,"rdp-pin %s %u\n",actual,(unsigned)port);
+    else fprintf(stdout,"rdp-pin %s\n",actual);
+    fflush(stdout);
     if(fgets(answer,sizeof(answer),stdin)){answer[strcspn(answer,"\r\n")]=0;ok=!_stricmp(answer,actual);}
     ReleaseSRWLockExclusive(&copyPipeLock);
 done:
@@ -414,7 +417,7 @@ static DWORD WINAPI connectWorker(void *arg) {
     (void)arg;
     WSADATA wsa;
     int rc=WSAStartup(MAKEWORD(2,2),&wsa);
-    if(rc==0){rc=probe_connect(host,rdpPort,domain,username,password);WSACleanup();}
+    if(rc==0){rc=probe_connect(host,rdpPort,domain,username,password,playRemoteAudio);WSACleanup();}
     if(rdp_password_rejected((unsigned)rc) && usedSavedPassword && credentialTarget[0])
         CredDeleteW(credentialTarget,CRED_TYPE_GENERIC,0);
     SecureZeroMemory(password,sizeof(password));
@@ -511,6 +514,7 @@ static BOOL read_credentials(HWND dlg){
     if(!port){invalid_port(dlg);return FALSE;}
     rdpPort=(uint16_t)port;
     clipboardFilesEnabled = IsDlgButtonChecked(dlg, IDC_FILES) == BST_CHECKED;
+    playRemoteAudio = IsDlgButtonChecked(dlg, IDC_AUDIO) == BST_CHECKED;
     wchar_t name[CREDUI_MAX_USERNAME_LENGTH+1],pass[CREDUI_MAX_PASSWORD_LENGTH+1];
     wchar_t usr[CREDUI_MAX_USERNAME_LENGTH+1],dom[CREDUI_MAX_DOMAIN_TARGET_LENGTH+1]=L"";
     if(!GetDlgItemTextW(dlg,IDC_ACCOUNT,name,ARRAYSIZE(name))){
@@ -538,7 +542,7 @@ static BOOL read_credentials(HWND dlg){
 }
 
 static void enable_login(BOOL enabled) {
-    const int ids[]={IDC_ACCOUNT,IDC_PASSWORD,IDC_FILES,IDC_REMEMBER,IDC_FORGET,IDC_PORT,IDOK};
+    const int ids[]={IDC_ACCOUNT,IDC_PASSWORD,IDC_FILES,IDC_AUDIO,IDC_REMEMBER,IDC_FORGET,IDC_PORT,IDOK};
     for(unsigned i=0;i<ARRAYSIZE(ids);i++)EnableWindow(GetDlgItem(loginWindow,ids[i]),enabled);
     InvalidateRect(loginWindow,NULL,FALSE);
 }
@@ -614,7 +618,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
         RdpLocale locale=rdp_locale_current();
         const struct {int control;RdpMessage message;} labels[]={
             {IDC_BRAND,Rdp_Login},{IDC_ACCOUNT_LABEL,Rdp_Account},{IDC_PASSWORD_LABEL,Rdp_Password},
-            {IDC_FILES,Rdp_AllowFiles},{IDC_REMEMBER,Rdp_Remember},
+            {IDC_FILES,Rdp_AllowFiles},{IDC_AUDIO,Rdp_PlayRemoteAudio},{IDC_REMEMBER,Rdp_Remember},
             {IDC_FORGET,Rdp_ClearCredentials},{IDCANCEL,Rdp_Cancel},{IDOK,Rdp_Connect},{IDC_DISMISS,Rdp_Close},
             {IDC_PORT_LABEL,Rdp_Port}
         };
@@ -622,6 +626,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
         layout_login_fields(dlg);
         layout_login_buttons(dlg);
         CheckDlgButton(dlg,IDC_FILES,BST_CHECKED);
+        CheckDlgButton(dlg,IDC_AUDIO,BST_UNCHECKED);
         wchar_t name[256];
         const wchar_t *target=(const wchar_t *)lp;
         wchar_t caption[128];swprintf(caption,ARRAYSIZE(caption),L"Calabi · %ls",rdp_text_in(locale,Rdp_Login));
@@ -677,7 +682,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg,UINT m,WPARAM wp,LPARAM lp){
     }
     case WM_NOTIFY:{
         NMCUSTOMDRAW *draw=(NMCUSTOMDRAW*)lp;
-        if((draw->hdr.idFrom==IDC_FILES || draw->hdr.idFrom==IDC_REMEMBER) &&
+        if((draw->hdr.idFrom==IDC_FILES || draw->hdr.idFrom==IDC_AUDIO || draw->hdr.idFrom==IDC_REMEMBER) &&
            draw->hdr.code==NM_CUSTOMDRAW && draw->dwDrawStage==CDDS_PREPAINT) {
             HDC dc=draw->hdc;RECT r=draw->rc;
             paint_login_parent(dc,dlg,draw->hdr.hwndFrom);
@@ -798,7 +803,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE prev,PWSTR args,int show) {
     }
     if(!wcscmp(args,L"--check-pin")){
         static const uint8_t cert[]="-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----";
-        return probe_verify_leaf(cert,sizeof(cert)-1)?0:1;
+        return probe_verify_leaf(cert,sizeof(cert)-1,PROBE_RDP_DEFAULT_PORT)?0:1;
     }
     sshLogin=!wcscmp(args,L"--ssh-login");
     wchar_t target[32],title[128];

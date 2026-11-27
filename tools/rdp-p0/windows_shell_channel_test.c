@@ -5,6 +5,19 @@
 #undef assert
 #define assert(e) do{if(!(e)){fprintf(stderr,"reverse channel assertion: %s line %d\n",#e,__LINE__);ExitProcess(3);}}while(0)
 static unsigned offers;
+static void check_copy_binding(void) {
+    const char key[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    BYTE challenge[COPY_BINDING_CHALLENGE_SIZE] = {0}, mac[COPY_BINDING_MAC_SIZE];
+    const BYTE expected[] = {0x48,0x08,0x0c,0x66,0x1a,0xa4,0x81,0x1c,0x10,0x7a,0xb2,0x19,0x0c,0x11,0x00,0x40,
+                             0x20,0xcc,0x3b,0x18,0xc0,0x24,0x1f,0x18,0xc5,0x8a,0xfe,0xf0,0xf4,0x20,0xcc,0xd4};
+    challenge[32] = 3389 >> 8;
+    challenge[33] = 3389 & 255;
+    assert(copy_binding_mac(3389, key, challenge, mac) && !memcmp(mac, expected, sizeof(mac)));
+    assert(!copy_binding_mac(3390, key, challenge, mac));
+    assert(!copy_binding_mac(3389, "", challenge, mac));
+    challenge[0] = 1;
+    assert(copy_binding_mac(3389, key, challenge, mac) && memcmp(mac, expected, sizeof(mac)));
+}
 static BYTE channelReply[CALFILE_HEADER+CALFILE_BLOCK];static UINT channelReplySize;
 static UINT VCAPITYPE capture_write(void *init,DWORD handle,void *data,ULONG n,void *user){
     (void)handle;(void)user;assert(n<=sizeof(channelReply));memcpy(channelReply,data,n);channelReplySize=n;
@@ -57,6 +70,7 @@ static HANDLE start_read(void){
 }
 static void finish_read(HANDLE worker){assert(WaitForSingleObject(worker,1500)==WAIT_OBJECT_0);CloseHandle(worker);}
 int main(void){
+    check_copy_binding();
     InitializeCriticalSection(&clipboard.lock);clipboard.initialized=clipboard.ready=TRUE;
     shellWire.done=CreateEventW(NULL,TRUE,FALSE,NULL);shellWire.wake=CreateEventW(NULL,FALSE,FALSE,NULL);filesEnabled=1;clipboard.sequence=nativeSequence;
     CliprdrClientContext channel={0};channel.ClientFormatList=list_sent;channel.ClientFormatListResponse=acknowledged;

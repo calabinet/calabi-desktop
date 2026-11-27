@@ -43,6 +43,12 @@ static inline int probe_display_make(double width,double height,double backing,s
     probe_display_limit(out,PROBE_DISPLAY_MAX_SIDE,PROBE_DISPLAY_MAX_SIDE,PROBE_DISPLAY_MAX_PIXELS);
     return 1;
 }
+static inline int probe_display_make_pixels(uint32_t width,uint32_t height,uint32_t scale,struct probe_display *out) {
+    if(!out || !width || !height || scale<100 || scale>500)return 0;
+    *out=(struct probe_display){.width=width,.height=height,.desktop_scale=scale};
+    probe_display_limit(out,PROBE_DISPLAY_MAX_SIDE,PROBE_DISPLAY_MAX_SIDE,PROBE_DISPLAY_MAX_PIXELS);
+    return 1;
+}
 static inline void probe_display_limit_pixels(struct probe_display *d,uint32_t maxw,uint32_t maxh,uint64_t area) {
     uint32_t scale=d->desktop_scale;
     probe_display_limit(d,maxw,maxh,area);

@@ -1,5 +1,6 @@
 #pragma once
 #include "clipboard_payload.h"
+#include "clipboard_html.h"
 #include "macos_transfer_status.h"
 #import <ImageIO/ImageIO.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -133,6 +134,16 @@ static NSData *copied_image(NSData *encoded, uint32_t *format) {
     *format = PROBE_FORMAT_PNG;
     return snapshot;
 }
+static NSData *clipboard_text_data(NSString *value) {
+    if(!value || value.length>PROBE_CLIPBOARD_LIMIT/2-1) return nil;
+    value=[[value stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] stringByReplacingOccurrencesOfString:@"\n" withString:@"\r\n"];
+    NSData *encoded=[value dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
+    if(!encoded || encoded.length>PROBE_CLIPBOARD_LIMIT-2) return nil;
+    NSMutableData *terminated=[encoded mutableCopy];
+    [terminated increaseLengthBy:2];
+    return terminated;
+}
+
 static int probe_clipboard_read_board(NSPasteboard *source,uint8_t **text,size_t *length,uint32_t *format,uint64_t *sequence) {
     __block NSData *data=nil;__block uint32_t type=0;__block uint64_t revision=*sequence;__block int result=1;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -162,17 +173,34 @@ static int probe_clipboard_read_board(NSPasteboard *source,uint8_t **text,size_t
             return;
         }
         if(!clipboardEnabled) return;
+        NSString *tabular=[board stringForType:NSPasteboardTypeTabularText];
+        NSString *value=tabular ?: [board stringForType:NSPasteboardTypeString];
+        NSData *encoded=clipboard_text_data(value);
+        NSData *html=[board dataForType:NSPasteboardTypeHTML];
+        size_t htmlLength=0, packedLength=0;
+        const uint8_t *htmlBytes=html.bytes;
+        size_t htmlSize=html.length;
+        if(htmlSize && htmlBytes[htmlSize-1]==0) htmlSize--;
+        BOOL table=clip_is_html_table(htmlBytes,htmlSize);
+        if(table) {
+            uint8_t *wrapped=clip_wrap_html_table(htmlBytes,htmlSize,&htmlLength);
+            if(wrapped) {
+                uint8_t *packed=clip_pack_html(wrapped,htmlLength,encoded.bytes,encoded.length,&packedLength);
+                free(wrapped);
+                if(packed) {
+                    data=[NSData dataWithBytesNoCopy:packed length:packedLength freeWhenDone:YES];
+                    type=PROBE_FORMAT_HTML;return;
+                }
+            }
+        }
+        if(encoded && (table || tabular || [value containsString:@"\t"])) {
+            data=encoded;type=PROBE_FORMAT_TEXT;return;
+        }
         if([board.types containsObject:NSPasteboardTypePNG] || [board.types containsObject:NSPasteboardTypeTIFF]) {
             data=[board dataForType:NSPasteboardTypePNG] ?: [board dataForType:NSPasteboardTypeTIFF];
             type=PROBE_FORMAT_DIB;return;
         }
-        NSString *value=[board stringForType:NSPasteboardTypeString];
-        if(!value || value.length>PROBE_CLIPBOARD_LIMIT/2-1) return;
-        value=[[value stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] stringByReplacingOccurrencesOfString:@"\n" withString:@"\r\n"];
-        NSData *encoded=[value dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
-        if(!encoded || encoded.length>PROBE_CLIPBOARD_LIMIT-2) return;
-        NSMutableData *terminated=[encoded mutableCopy];[terminated increaseLengthBy:2];
-        data=terminated;type=PROBE_FORMAT_TEXT;
+        if(encoded) {data=encoded;type=PROBE_FORMAT_TEXT;}
     });
     if (type == PROBE_FORMAT_DIB) {
         uint32_t imageFormat;

@@ -442,6 +442,13 @@ pub(crate) fn rdp_helper() -> Result<std::path::PathBuf,String> {
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
+pub(crate) fn permits_remote_login_port(ports: &str, port: Option<u16>) -> bool {
+    ports.is_empty() || port.is_some_and(|port| {
+        port != 0 && ports.split(',').any(|value| value.parse::<u16>() == Ok(port))
+    })
+}
+
+#[cfg(any(windows, target_os = "macos", test))]
 fn verified_rdp_pin<'a>(state: &'a Value, scope: &str, host: &str, local: &str, observed: &str) -> Option<&'a str> {
     if scope.is_empty() || state["scope"] != scope || state["host"] != host || state["local"] != local {
         return None;
@@ -541,8 +548,10 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
         let history = agent.call(json!({"action":"rdp_history","rdp_profile":profile})).await.unwrap_or(Value::Null);
         let previous = history.as_array().into_iter().flatten().find(|item| item["peer"] == key);
         let previous_account = previous.and_then(|item| item["account"].as_str()).unwrap_or("");
+        let ports = result["ports"].as_str().unwrap_or("").to_owned();
         let previous_port = previous.and_then(|item| item["port"].as_u64())
-            .and_then(|port| u16::try_from(port).ok()).filter(|port| *port != 0).unwrap_or(3389);
+            .and_then(|port| u16::try_from(port).ok()).filter(|port| *port != 0 && permits_remote_login_port(&ports, Some(*port)))
+            .or_else(|| ports.split(',').next()?.parse().ok()).unwrap_or(3389);
         for ip in [host, local] {
             let octets = ip.parse::<std::net::Ipv4Addr>().map_err(|_| "Invalid mesh IPv4 address")?.octets();
             if octets[0] != 100 || !(64..128).contains(&octets[1]) { return Err("Expected a Calabi mesh address".into()); }
@@ -551,19 +560,22 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
         let mut command = Command::new(&helper);
         let bridge = crate::rdp_workspace::Bridge::prepare(&mut command).await?;
         let session_id = format!("rdp-session-{}", uuid::Uuid::new_v4().simple());
+        let copy_binding = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
         if let Some(path) = &agent.native_locale_path { command.env("CALABI_UI_LOCALE_FILE", path); }
         command.env("CALABI_UI_LOCALE", tray_locale::code(window.app_handle()));
         #[cfg(windows)]
         command.env("OPENSSL_MODULES", helper.with_file_name("ossl-modules"))
             .env("CALABI_RDP_PARENT_PID", std::process::id().to_string());
         #[cfg(any(windows, target_os = "macos"))]
-        command.env_remove("CALABI_RDP_FILE_BRIDGE").env_remove("CALABI_RDP_FILE_STREAM").env("CALABI_RDP_FILE_MESH","1");
+        command.env_remove("CALABI_RDP_FILE_BRIDGE").env_remove("CALABI_RDP_FILE_STREAM")
+            .env("CALABI_RDP_FILE_MESH","1").env("CALABI_RDP_COPY_TOKEN", &copy_binding);
         #[cfg(windows)]
         if let Some(base)=std::env::var_os("LOCALAPPDATA") {
             let logs=std::path::PathBuf::from(base).join("Calabi").join("Logs");
             if std::fs::create_dir_all(&logs).is_ok() {
                 command.env("CALABI_RDP_CLIP_LOG",logs.join(format!("rdp-clipboard-{host}.log")));
                 command.env("CALABI_RDP_GFX_LOG",logs.join(format!("rdp-display-{host}.log")));
+                command.env("CALABI_RDP_DISPLAY_LOG",logs.join(format!("rdp-layout-{host}-{session_id}.log")));
                 command.env("CALABI_RDP_DIAG_LOG",logs.join(format!("rdp-session-{host}-{session_id}.log")));
             }
         }
@@ -572,6 +584,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             .env("CALABI_RDP_CREDENTIAL_KEY",credential_key)
             .env("CALABI_RDP_ACCOUNT_HINT",previous_account)
             .env("CALABI_RDP_PORT",previous_port.to_string())
+            .env("CALABI_RDP_REPORT_PORT", "1")
             .env_remove("CALABI_P0_SHA256")
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
@@ -613,6 +626,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
             let mut preview_revision = 0;
             let mut preview_at = tokio::time::Instant::now() - std::time::Duration::from_secs(10);
             let mut pin_verified=false;
+            let mut copy_port = 0;
             let mut workspace_connected=false;
             let mut login_display = None;
             #[cfg(target_os = "macos")]
@@ -683,7 +697,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                                 agent.record_error("rdp_copy","文件复制连接已中断，正在恢复");
                                 copy_session=None;
                             }
-                        } else if copy_requested && pin_verified && tokio::time::Instant::now() >= copy_retry_at {
+                        } else if copy_requested && pin_verified && workspace_connected && tokio::time::Instant::now() >= copy_retry_at {
                             // The old lease may still be held on the peer. Retry at a bounded rate.
                             copy_retry_at = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
                             if let Ok(target) = agent.call(json!({"action":"rdp_target","peer":key})).await {
@@ -691,7 +705,8 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                                     copy_requested = target["scope"] == scope && target["profile"] == profile
                                         && target["host"] == host && target["local"] == local;
                                     if copy_requested && bridge.accepts_clipboard() {
-                                        if let Ok(result) = agent.call(json!({"action":"mesh_copy_start","peer":key,"rdp_profile":profile})).await {
+                                        if let Ok(result) = agent.call(json!({"action":"mesh_copy_start","peer":key,
+                                            "rdp_profile":profile,"rdp_port":copy_port,"copy_binding":copy_binding})).await {
                                             copy_session = result["session"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
                                             if copy_session.is_some() { log::info!("RDP file copy lease established"); }
                                         }
@@ -750,8 +765,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                 }
                 if let Some(request)=line.strip_prefix("rdp-mesh ") {
                     let answer=if let Some(id) = copy_session.as_ref().filter(|_| request.len() <= 20000 && bridge.accepts_clipboard()) {
-                        let mut action = json!({"action":"mesh_copy_rpc","copy_request":request});
-                        if request == "mesh_state" { action["id"] = json!(id); }
+                        let action = json!({"action":"mesh_copy_rpc","copy_request":request,"id":id});
                         match agent.call(action).await {
                             Ok(value)=>value["reply"].as_str().unwrap_or("error").to_owned(),
                             Err(_)=>"error".to_owned(),
@@ -801,12 +815,15 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                     continue;
                 }
                 let Some(observed) = line.strip_prefix("rdp-pin ") else { continue; };
+                let (observed, dialed_port) = observed.split_once(' ').map_or((observed, None), |(pin, port)| (pin, port.parse::<u16>().ok()));
                 if observed.len()!=64 || !observed.bytes().all(|b| b.is_ascii_hexdigit()){break;}
                 let lookup = async {
                     for attempt in 0..4 {
                         let state=agent.call(json!({"action":"rdp_target","peer":key})).await.ok()?;
                         if scope.is_empty() || state["scope"]!=scope || state["host"]!=host || state["local"]!=local
                             || state["profile"].as_str().unwrap_or("")!=profile {return None;}
+                        if !permits_remote_login_port(&ports, dialed_port) ||
+                            !permits_remote_login_port(state["ports"].as_str().unwrap_or(""), dialed_port) {return None;}
                         if let Some(pin) = verified_rdp_pin(&state,&scope,&host,&local,observed){return Some(pin.to_owned());}
                         if attempt<3 {tokio::time::sleep(std::time::Duration::from_millis(750)).await;}
                     }
@@ -816,6 +833,7 @@ pub async fn files_action(window: WebviewWindow, supervisor: State<'_, Option<Ar
                 // leave its unread response for the next desktop action.
                 let pin=lookup.await.unwrap_or_default();
                 pin_verified=!pin.is_empty();
+                copy_port = if pin_verified { dialed_port.unwrap_or(0) } else { 0 };
                 if pin.is_empty() { agent.record_error("rdp_verify","No matching authenticated RDP listener certificate for this device"); }
                 if input.write_all(format!("{pin}\n").as_bytes()).await.is_err(){break;}
             }
@@ -1071,6 +1089,15 @@ mod diagnostic_tests {
         }
         state["pin"] = json!("");
         assert!(super::verified_rdp_pin(&state,"s","h","l","").is_none());
+    }
+
+    #[test]
+    fn delegated_remote_login_requires_the_reported_port() {
+        use super::permits_remote_login_port;
+        assert!(permits_remote_login_port("", None));
+        assert!(permits_remote_login_port("3389,3391", Some(3391)));
+        assert!(!permits_remote_login_port("3389,3391", Some(3390)));
+        assert!(!permits_remote_login_port("3389,3391", None));
     }
 
     #[test]

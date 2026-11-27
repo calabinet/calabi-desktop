@@ -2,7 +2,9 @@
 //
 //	go run. keygen --out <privkey-file>
 //	    Generate an ed25519 keypair. The base64 PRIVATE key → <privkey-file>.
+//
 // The base64 PUBLIC key →
+//
 //	    stdout (bake into the daemon: cmd/calabi selfupdate_wire.go updatePubKeyB64).
 //
 //	go run. sign --installer <f> --url <u> --platform <key> --privkey <file>

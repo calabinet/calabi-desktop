@@ -1,11 +1,54 @@
 #pragma once
 #include <shellapi.h>
+#include "clipboard_html.h"
 static int clipboardFilesEnabled;
 int probe_clipboard_enabled(void) { return 1; }
 int probe_clipboard_content_enabled(void) { return 1; }
 int probe_clipboard_files_enabled(void) { return clipboardFilesEnabled; }
 #include "windows_copy_bridge.h"
 #include "windows_files.h"
+
+static int read_clipboard_text(uint8_t **text, size_t *length, BOOL *tabular) {
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) return 1;
+    HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    if (!data) return 0;
+    SIZE_T size = GlobalSize(data);
+    if (size < 2 || size > PROBE_CLIPBOARD_LIMIT || size % 2) return 1;
+    const wchar_t *value = GlobalLock(data);
+    if (!value) return 0;
+    size_t units = 0;
+    while (units < size/2 && value[units]) {
+        if (value[units] == L'\t') *tabular = TRUE;
+        units++;
+    }
+    if (units < size/2) {
+        size_t bytes = (units+1)*2;
+        *text = malloc(bytes);
+        if (*text) {
+            memcpy(*text, value, bytes);
+            *length = bytes;
+        }
+    }
+    GlobalUnlock(data);
+    return units == size/2 || *text != NULL;
+}
+
+static uint8_t *read_clipboard_table(const uint8_t *text, size_t length, size_t *size) {
+    UINT format = RegisterClipboardFormatW(L"HTML Format");
+    if (!format || !IsClipboardFormatAvailable(format)) return NULL;
+    HANDLE handle = GetClipboardData(format);
+    SIZE_T capacity = handle ? GlobalSize(handle) : 0;
+    if (!capacity || capacity > PROBE_CLIPBOARD_LIMIT) return NULL;
+    const uint8_t *html = GlobalLock(handle);
+    if (!html) return NULL;
+    const uint8_t *end = memchr(html, 0, capacity);
+    size_t count = end ? (size_t)(end - html) : capacity;
+    uint8_t *table = NULL;
+    if (count > 8 && !memcmp(html, "Version:", 8) && clip_is_html_table(html, count))
+        table = clip_pack_html(html, count, text, length, size);
+    GlobalUnlock(handle);
+    return table;
+}
 
 int probe_clipboard_read(uint8_t **text, size_t *length, uint32_t *format, uint64_t *sequence) {
 #ifdef CALABI_REMOTE_WORKSPACE
@@ -42,40 +85,46 @@ int probe_clipboard_read(uint8_t **text, size_t *length, uint32_t *format, uint6
         }
         CloseClipboard();return 1;
     }
-    if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5)) {
+    BOOL tabular = FALSE;
+    int readText = read_clipboard_text(text, length, &tabular);
+    size_t tableSize = 0;
+    uint8_t *table = read_clipboard_table(*text, *length, &tableSize);
+    if (table) {
+        free(*text);
+        *text = table;
+        *length = tableSize;
+        *format = PROBE_FORMAT_HTML;
+        CloseClipboard();
+        return 1;
+    }
+    if (*text && !tabular) {
+        // Excel ranges with only one column or cell may have no tab delimiter.
+        tabular = IsClipboardFormatAvailable(RegisterClipboardFormatW(L"Biff12")) ||
+                  IsClipboardFormatAvailable(RegisterClipboardFormatW(L"Biff8")) ||
+                  IsClipboardFormatAvailable(RegisterClipboardFormatW(L"XML Spreadsheet"));
+    }
+    if (!(*text && tabular) && (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5))) {
         const UINT formats[]={CF_DIB,CF_DIBV5};
         BOOL retry=FALSE;
-        for(unsigned i=0;i<2 && !*text;i++){
+        uint8_t *image = NULL;
+        size_t imageSize = 0;
+        for(unsigned i=0;i<2 && !image;i++){
             if(!IsClipboardFormatAvailable(formats[i]))continue;
             HANDLE h=GetClipboardData(formats[i]);SIZE_T n=h?GlobalSize(h):0;
             const BYTE *p=h?GlobalLock(h):NULL;
             if(!h || (n && !p))retry=TRUE;
-            if(p)*text=clip_normalize_dib(p,n,length);
+            if(p)image=clip_normalize_dib(p,n,&imageSize);
             if(p)GlobalUnlock(h);
         }
-        if(*text)*format=PROBE_FORMAT_DIB;
-        if(!*text && retry){*sequence=beforeRead;CloseClipboard();return 0;}
-        CloseClipboard();return 1;
-    }
-    BOOL hasText = !IsClipboardFormatAvailable(CF_HDROP) && IsClipboardFormatAvailable(CF_UNICODETEXT);
-    HANDLE data = hasText ? GetClipboardData(CF_UNICODETEXT) : NULL;
-    if (hasText && !data) { CloseClipboard(); return 0; }
-    SIZE_T size = data ? GlobalSize(data) : 0;
-    if (size >= 2 && size <= PROBE_CLIPBOARD_LIMIT && !(size % 2)) {
-        const wchar_t *value = GlobalLock(data);
-        if (!value) { CloseClipboard(); return 0; }
-        if (value) {
-            size_t units = 0;
-            while (units < size/2 && value[units]) units++;
-            if (units < size/2) {
-                *length = (units+1)*2;
-                *text = malloc(*length);
-                if (*text) memcpy(*text, value, *length);
-                else { GlobalUnlock(data); CloseClipboard(); *length = 0; return 0; }
-            }
-            GlobalUnlock(data);
+        if(image) {
+            free(*text);
+            *text=image;
+            *length=imageSize;
+            *format=PROBE_FORMAT_DIB;
         }
+        if(!*text && retry){*sequence=beforeRead;CloseClipboard();return 0;}
     }
+    if (!*text && !readText) {*sequence=beforeRead;CloseClipboard();return 0;}
     CloseClipboard();
     return 1;
 }

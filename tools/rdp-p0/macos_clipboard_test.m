@@ -21,6 +21,38 @@ static void expect_mesh_owned(NSPasteboard *board){
     assert(done);
 }
 
+static void expect_table(NSPasteboard *board, uint32_t expectedFormat) {
+    __block BOOL done=NO;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+        uint8_t *data=NULL;
+        size_t length=0;
+        uint32_t format=0;
+        uint64_t sequence=UINT64_MAX;
+        assert(probe_clipboard_read_board(board,&data,&length,&format,&sequence)==1);
+        assert(data && length && format==expectedFormat);
+        size_t htmlSize=0;
+        if(format==PROBE_FORMAT_HTML) {
+            htmlSize=clip_html_size(data,length);
+            assert(htmlSize);
+            unsigned start, end, first, last;
+            assert(sscanf((const char *)data+4,"Version:1.0\r\nStartHTML:%u\r\nEndHTML:%u\r\nStartFragment:%u\r\nEndFragment:%u",
+                          &start,&end,&first,&last)==4);
+            assert(start<first && first<last && last<end && end+1==htmlSize);
+            const char *fragment="<table><tr><td style=\"font-weight:bold\">中文</td><td>8</td></tr></table>";
+            assert(last-first==strlen(fragment) && !memcmp(data+4+first,fragment,last-first));
+        }
+        static const uint8_t cells[]={0x2d,0x4e,0x87,0x65,'\t',0,'8',0,'\r',0,'\n',0,'4',0,'\t',0,'2',0,0,0};
+        const size_t offset=htmlSize ? 4+htmlSize : 0;
+        assert(length-offset==sizeof(cells) && !memcmp(data+offset,cells,sizeof(cells)));
+        free(data);
+        dispatch_async(dispatch_get_main_queue(),^{done=YES;});
+    });
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:5];
+    while(!done && deadline.timeIntervalSinceNow>0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    assert(done);
+}
+
 int main(void) {
     @autoreleasepool {
         NSPasteboard *board=[NSPasteboard pasteboardWithUniqueName];
@@ -33,6 +65,14 @@ int main(void) {
             0x42,0x60,0xea,0x3f,0x03,0x03,0x03,0x03,0x00,0x3f,0xd2,0x05,0xfb,0x0d,0x08,0xf4,
             0x6f,0x00,0x00,0x00,0x00,0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82};
         NSData *png=[NSData dataWithBytes:fixture length:sizeof(fixture)];
+        clipboardEnabled=YES;
+        assert([board setData:png forType:NSPasteboardTypePNG]);
+        assert([board setString:@"中文\t8\n4\t2" forType:NSPasteboardTypeString]);
+        assert([board.types containsObject:NSPasteboardTypePNG]);
+        expect_table(board,PROBE_FORMAT_TEXT);
+        assert([board setString:@"<html><body><table><tr><td style=\"font-weight:bold\">中文</td><td>8</td></tr></table></body></html>" forType:NSPasteboardTypeHTML]);
+        expect_table(board,PROBE_FORMAT_HTML);
+        [board clearContents];
         assert([board setData:png forType:NSPasteboardTypePNG]);
         uint32_t imageFormat;
         NSData *snapshot=copied_image([board dataForType:NSPasteboardTypePNG], &imageFormat);
@@ -96,7 +136,7 @@ int main(void) {
         clipboard_exit_cleanup();
         assert([[NSFileManager defaultManager] removeItemAtPath:folder error:NULL]);
         [board releaseGlobally];
-        puts("macOS image/file clipboard fixtures passed");
+        puts("macOS table/image/file clipboard fixtures passed");
     }
     return 0;
 }

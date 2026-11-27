@@ -1,5 +1,6 @@
 #include "clipboard.h"
 #include "clipboard_payload.h"
+#include "clipboard_html.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include <winpr/synch.h>
 #include <winpr/interlocked.h>
 #include <winpr/sysinfo.h>
+#include "copy_binding_channel.h"
 
 // One helper owns one connection. Channel callbacks and polling share this lock.
 static struct {
@@ -182,6 +184,17 @@ static UINT data_request(CliprdrClientContext *channel, const CLIPRDR_FORMAT_DAT
             response.common.msgFlags = CB_RESPONSE_OK;
             trace_clipboard("image_response_bytes", response.common.dataLen);
         }
+    } else if (clipboard.local && clipboard.localFormat == PROBE_FORMAT_HTML) {
+        size_t htmlSize = clip_u32(clipboard.local);
+        size_t textSize = clipboard.localLength - 4 - htmlSize;
+        if (request->requestedFormatId == PROBE_FORMAT_HTML) {
+            response.requestedFormatData = clipboard.local + 4;
+            response.common.dataLen = (UINT32)htmlSize;
+        } else if (request->requestedFormatId == CF_UNICODETEXT && textSize) {
+            response.requestedFormatData = clipboard.local + 4 + htmlSize;
+            response.common.dataLen = (UINT32)textSize;
+        }
+        if (response.requestedFormatData) response.common.msgFlags = CB_RESPONSE_OK;
     } else if (request->requestedFormatId == clipboard.localFormat && clipboard.local) {
         response.common.msgFlags = CB_RESPONSE_OK;
         response.common.dataLen = (UINT32)clipboard.localLength;
@@ -490,6 +503,11 @@ BOOL clipboard_load(freerdp *rdp) {
     UINT result = freerdp_channels_client_load_ex(rdp->context->channels, rdp->context->settings,
                                                 (PVIRTUALCHANNELENTRYEX)entry, NULL);
     trace_clipboard("channel_load_result", result);
+    if (result == 0 && probe_clipboard_files_enabled() && getenv("CALABI_RDP_COPY_TOKEN")) {
+        UINT16 port = (UINT16)freerdp_settings_get_uint32(rdp->context->settings, FreeRDP_ServerPort);
+        UINT bindingResult = copy_binding_load(rdp, port, getenv("CALABI_RDP_COPY_TOKEN"));
+        trace_clipboard("files_copy_binding_channel", bindingResult);
+    }
 #ifdef CALABI_SHELL_RECEIVE
     if(result==0 && probe_clipboard_files_enabled() && getenv("CALABI_RDP_FILE_STREAM"))
         result=freerdp_channels_client_load_ex(rdp->context->channels,rdp->context->settings,file_channel_entry,NULL);
@@ -553,9 +571,22 @@ void clipboard_poll(void) {
         clear_text(&clipboard.local, &clipboard.localLength);
         clear_text(&clipboard.incoming, &clipboard.incomingLength);
         clipboard.consumedGeneration = clipboard.generation;
-        BOOL valid = format == PROBE_FORMAT_PNG
-            ? probe_clipboard_content_enabled() && clip_image_png_size(text, length) != 0
-            : valid_payload(format, text, length);
+        size_t htmlSize = format == PROBE_FORMAT_HTML ? clip_html_size(text, length) : 0;
+        BOOL valid;
+        if (format == PROBE_FORMAT_HTML) {
+            valid = htmlSize && probe_clipboard_content_enabled();
+        } else if (format == PROBE_FORMAT_PNG) {
+            valid = probe_clipboard_content_enabled() && clip_image_png_size(text, length) != 0;
+        } else {
+            valid = valid_payload(format, text, length);
+        }
+        if (valid && format == PROBE_FORMAT_HTML) {
+            size_t textSize = length - 4 - htmlSize;
+            if (textSize && !valid_text(text + 4 + htmlSize, textSize)) {
+                memset(text + 4 + htmlSize, 0, textSize);
+                length = 4 + htmlSize;
+            }
+        }
         if (valid) {
             clipboard.localFormat = format;
             clipboard.local = text; clipboard.localLength = length;
@@ -569,6 +600,11 @@ void clipboard_poll(void) {
         if (clipboard.local && clipboard.localFormat == PROBE_FORMAT_PNG) {
             list.formats = imageFormats;
             list.numFormats = 2;
+        }
+        CLIPRDR_FORMAT htmlFormats[2] = {{PROBE_FORMAT_HTML, PROBE_HTML_FORMAT_NAME}, {CF_UNICODETEXT, NULL}};
+        if (clipboard.local && clipboard.localFormat == PROBE_FORMAT_HTML) {
+            list.formats = htmlFormats;
+            list.numFormats = clipboard.localLength > 4 + htmlSize ? 2 : 1;
         }
 #ifdef CALABI_SHELL_RECEIVE
         file_offer_refresh();

@@ -25,7 +25,14 @@ int main(void) {
                 assert(NSMaxY(form.password.frame) < NSMinY(form.port.frame));
                 assert(!form.hint.stringValue.length && form.hint.hidden);
                 assert((form.files == nil) == (ssh != 0));
-                if (form.files) assert(form.files.state == NSControlStateValueOn);
+                assert((form.audio == nil) == (ssh != 0));
+                if (form.files) {
+                    assert(form.files.state == NSControlStateValueOn);
+                    assert(form.audio.state == NSControlStateValueOff);
+                    assert([form.audio.title isEqualToString:RDP_NS(PlayRemoteAudio)]);
+                    assert(NSMinY(form.audio.frame) > NSMaxY(form.files.frame));
+                    assert(NSMinY(form.remember.frame) > NSMaxY(form.audio.frame));
+                }
                 for (NSView *view in form.panel.contentView.subviews) {
                     if (![view isKindOfClass:NSTextField.class] || view == form.hint) continue;
                     NSTextField *label = (NSTextField *)view;

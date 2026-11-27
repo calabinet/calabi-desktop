@@ -40,7 +40,7 @@ def build(work, out):
         name = f"mingw-w64-ucrt-x86_64-{package}-any.pkg.tar.zst"
         unpack(work, name, "https://repo.msys2.org/mingw/ucrt64/"+name, digest, "ucrt64/")
     obj, deps = work / "build", work / "ucrt64"
-    channels = ("cliprdr", "drdynvc", "rdpgfx")
+    channels = ("cliprdr", "drdynvc", "disp", "rdpgfx", "rdpdr", "rdpsnd")
     off = ("WITH_CLIENT", "WITH_SERVER", "WITH_SERVER_INTERFACE", "WITH_SERVER_CHANNELS",
            "WITH_FFMPEG", "WITH_SWSCALE", "WITH_MANPAGES", "WITH_SAMPLE",
            "WITH_URIPARSER", "BUILD_TESTING", "WITH_CAIRO", "WITH_WEBVIEW", "WITH_FUSE",
@@ -51,7 +51,7 @@ def build(work, out):
                     "-DCMAKE_C_FLAGS=-D__STDC_NO_THREADS__=1", "-DCMAKE_SHARED_LINKER_FLAGS=-static-libgcc",
                     "-DWITHOUT_FREERDP_3x_DEPRECATED=ON", "-DWITH_CLIENT_COMMON=ON",
                     "-DWITH_CHANNELS=ON", "-DWITH_CLIENT_CHANNELS=ON",
-                    "-DWITH_MEDIA_FOUNDATION=ON",
+                    "-DWITH_MEDIA_FOUNDATION=ON", "-DWITH_WINMM=ON",
                     *[f"-DCHANNEL_{p.parent.name.upper()}=OFF"
                       for p in (source/"channels").glob("*/ChannelOptions.cmake") if p.parent.name not in channels],
                     *[f"-DCHANNEL_{channel.upper()}{suffix}={value}" for channel in channels
@@ -116,6 +116,18 @@ def build(work, out):
                        env=dict(env, PATH=str(out)+";"+env["PATH"]), timeout=20)
     finally:
         gfx_test.unlink(missing_ok=True)
+    display_test = work/"display-channel-test.exe"
+    subprocess.run(["gcc", "-std=gnu11", "-D__STDC_NO_THREADS__=1", "-static-libgcc",
+                    *["-I"+str(p/"include") for p in (source,obj,source/"winpr",obj/"winpr")],
+                    HERE/"display_channel_test.c",
+                    "-L"+str(obj/"libfreerdp"), "-L"+str(obj/"winpr/libwinpr"),
+                    "-L"+str(obj/"client/common"), "-lfreerdp-client3", "-lfreerdp3", "-lwinpr3",
+                    "-o", display_test], check=True)
+    try:
+        subprocess.run([display_test, "--require-audio"], check=True, cwd=out,
+                       env=dict(env, PATH=str(out)+";"+env["PATH"]), timeout=20)
+    finally:
+        display_test.unlink(missing_ok=True)
     clipboard_test = work/"clipboard-test.exe"
     subprocess.run(["gcc", "-std=gnu11", "-D__STDC_NO_THREADS__=1", "-static-libgcc",
                     *["-I"+str(p/"include") for p in (source,obj,source/"winpr",obj/"winpr")],
@@ -170,7 +182,8 @@ def build(work, out):
     subprocess.run(["gcc", *[flag for flag in cflags if flag not in {"-DCALABI_SHELL_RECEIVE", "-DCALABI_RDP_GFX"}],
                     HERE/"windows_presentation_test.c",
                     "-L"+str(obj/"libfreerdp"), "-L"+str(obj/"winpr/libwinpr"),
-                    "-lfreerdp3", "-lwinpr3", "-lws2_32", "-o", presentation_test], check=True)
+                    "-L"+str(obj/"client/common"), "-lfreerdp-client3", "-lfreerdp3", "-lwinpr3",
+                    "-lws2_32", "-o", presentation_test], check=True)
     try:
         subprocess.run([presentation_test], check=True, cwd=out,
                        env=dict(env, PATH=str(out)+";"+env["PATH"]), timeout=20)
@@ -208,10 +221,16 @@ def build(work, out):
         subprocess.run([mesh_test],check=True,env=env,cwd=out,timeout=20)
     finally:
         mesh_test.unlink(missing_ok=True)
-    for answer, success in ((pin,True), ("0"*64,False)):
-        r = subprocess.run([exe,"--check-pin"],env=env,cwd=out,text=True,input=answer+"\n",capture_output=True)
-        if (r.returncode==0)!=success or r.stdout.strip().lower()!="rdp-pin "+pin:
-            raise RuntimeError("RDP certificate verification check failed")
+    for report_port in (False, True):
+        pin_env = {key: value for key, value in env.items() if key != "CALABI_RDP_REPORT_PORT"}
+        if report_port:
+            pin_env["CALABI_RDP_REPORT_PORT"] = "1"
+        challenge = f"rdp-pin {pin}" + (" 3389" if report_port else "")
+        for answer, success in ((pin, True), ("0"*64, False)):
+            r = subprocess.run([exe, "--check-pin"], env=pin_env, cwd=out, text=True,
+                               input=answer+"\n", capture_output=True)
+            if (r.returncode == 0) != success or r.stdout.strip().lower() != challenge:
+                raise RuntimeError("RDP certificate verification check failed")
 
 
 if __name__=="__main__":

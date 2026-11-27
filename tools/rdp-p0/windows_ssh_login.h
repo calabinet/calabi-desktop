@@ -6,11 +6,12 @@ static BOOL ssh_used_saved;
 
 static void ssh_initialize(HWND dlg) {
     ShowWindow(GetDlgItem(dlg,IDC_FILES),SW_HIDE);
+    ShowWindow(GetDlgItem(dlg,IDC_AUDIO),SW_HIDE);
     SendDlgItemMessageW(dlg,IDC_ACCOUNT,0x1501,TRUE,(LPARAM)rdp_text(Rdp_Account));
     SendDlgItemMessageW(dlg,IDC_ACCOUNT,EM_SETLIMITTEXT,128,0);
     SendDlgItemMessageW(dlg,IDC_PASSWORD,EM_SETLIMITTEXT,1000,0);
-    // Remove the space occupied by the RDP file option.
-    shift_login_footer(dlg,-15);
+    // Remove the rows for the RDP-only options.
+    shift_login_footer(dlg,-30);
 }
 
 enum {SSH_DONE,SSH_AUTH,SSH_KEY_CHANGED,SSH_KEY_REJECTED,SSH_READ_FAILED,SSH_INVALID,SSH_TIMEOUT,SSH_FAILED};

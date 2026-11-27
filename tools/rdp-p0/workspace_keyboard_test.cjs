@@ -117,9 +117,32 @@ const server = http.createServer((req, res) => {
       await evaluate(`window.inputs=[];key('KeyB',true);key('KeyB',false);`);
       await sleep(60);
       assert.deepEqual(await evaluate('window.inputs.map(x=>x.id)'), ['second', 'second'], platform + ': keys must follow session selection');
+      await evaluate(`window.inputs=[];
+        key('ControlLeft',true,{ctrlKey:true});key('ShiftLeft',true,{ctrlKey:true,shiftKey:true});
+        key('KeyZ',true,{ctrlKey:true,shiftKey:true});key('KeyZ',false,{ctrlKey:true,shiftKey:true});
+        key('ShiftLeft',false,{ctrlKey:true});key('ControlLeft',false);`);
+      assert.deepEqual(await evaluate('window.inputs.map(x=>[x.kind,x.a])'),
+        [[10,0x1d],[10,0x2a],[10,0x2c],[11,0x2c],[11,0x2a],[11,0x1d]], platform + ': physical Ctrl+Shift+Z remains unchanged');
       if (platform === 'MacIntel') {
         await evaluate(`window.inputs=[];key('KeyC',true,{metaKey:true});`); await sleep(60);
         assert.deepEqual(await evaluate('window.inputs.map(x=>[x.kind,x.a])'), [[10,0x1d],[2,0x2e],[11,0x1d]], 'Mac Command+C remains mapped to remote Ctrl+C');
+        for (const [code, scan] of [['KeyZ', 0x2c], ['KeyF', 0x21], ['KeyS', 0x1f]]) {
+          const prevented = await evaluate(`window.inputs=[];
+            !key('${code}',true,{metaKey:true}) && key('${code}',false,{metaKey:true});`);
+          assert.equal(prevented, true, code + ': prevent the local Command shortcut on the canvas');
+          assert.deepEqual(await evaluate('window.inputs.map(x=>[x.kind,x.a])'), [[10,0x1d],[2,scan],[11,0x1d]]);
+        }
+        await evaluate(`window.inputs=[];
+          key('ShiftRight',true,{shiftKey:true});
+          key('KeyZ',true,{metaKey:true,shiftKey:true});key('KeyZ',false,{metaKey:true,shiftKey:true});
+          key('ShiftRight',false);`);
+        assert.deepEqual(await evaluate('window.inputs.map(x=>[x.kind,x.a])'),
+          [[10,0x36],[11,0x36],[10,0x1d],[2,0x15],[11,0x1d],[10,0x36],[11,0x36]],
+          'Mac Command+Shift+Z sends Ctrl+Y and restores the physical Shift');
+        const outside = await evaluate(`document.querySelector('.remote-edge').focus();window.inputs=[];
+          key('KeyZ',true,{metaKey:true});`);
+        assert.equal(outside, true, 'Command+Z remains available outside the RDP canvas');
+        assert.deepEqual(await evaluate('window.inputs.filter(x=>x.kind!==0)'), [], 'No shortcut is sent outside the RDP canvas');
       }
       assert.equal(await evaluate('window.inputs.some(x=>x.kind===1)'), false, platform + ': no locally composed Unicode text');
       results.push({ platform, native, physicalIme: true, release: true, clickFocus: true, sessionSelection: true });

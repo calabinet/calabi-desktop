@@ -513,6 +513,29 @@ mod tests {
             assert_eq!(control, packet(0, 1, 0, 0));
             peer.read_exact(&mut control).await.unwrap();
             assert_eq!(control, packet(12, 1920, 1080, 100));
+            #[cfg(windows)]
+            {
+                bridge.resize(3840, 2160, 150, true);
+                peer.read_exact(&mut control).await.unwrap();
+                assert_eq!(control, packet(12, 3840, 2160, 150));
+                let (width, height) = (3840u32, 2160u32);
+                let size = width * height * 4;
+                for field in [width, height, size] {
+                    peer.write_all(&field.to_le_bytes()).await.unwrap();
+                }
+                peer.write_all(&vec![0x7f; size as usize]).await.unwrap();
+                let frame = loop {
+                    let frame = bridge.latest_frame();
+                    if frame_revision(&frame) == 2 {
+                        break frame;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                };
+                assert_eq!(frame[4..8], width.to_le_bytes());
+                assert_eq!(frame[8..12], height.to_le_bytes());
+                assert_eq!(frame.len(), 12 + size as usize);
+                assert_eq!(frame.last(), Some(&0x7f));
+            }
             bridge.stop();
             peer.read_exact(&mut control).await.unwrap();
             assert_eq!(control, packet(0, 2, 0, 0));

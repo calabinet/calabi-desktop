@@ -9,13 +9,15 @@
 static HANDLE gate;
 static LONG attempts;
 static uint16_t attemptedPort;
+static int attemptedAudio;
 static int scenario;
 static unsigned cancelReceives,cancelSends;
 void clipboard_cancel_files(void) {cancelReceives++;}
 void clipboard_cancel_send(void) {cancelSends++;}
-int probe_connect(const char *h,uint16_t port,const char *d,const char *u,const char *p) {
+int probe_connect(const char *h,uint16_t port,const char *d,const char *u,const char *p,int play_audio) {
     (void)h;(void)d;(void)u;(void)p;InterlockedIncrement(&attempts);
     attemptedPort=port;
+    attemptedAudio=play_audio;
     assert(WaitForSingleObject(gate,5000)==WAIT_OBJECT_0);
     if(scenario==1)return 0x00020014;
     BYTE frame[16]={0};probe_frame(frame,2,2,8);
@@ -187,6 +189,10 @@ static void test_localized_login(BOOL ssh) {
         assert(!wcscmp(caption,rdp_text_in((RdpLocale)i,Rdp_Port)));
         GetDlgItemTextW(localized,IDC_FILES,caption,ARRAYSIZE(caption));
         assert(!wcscmp(caption,rdp_text_in((RdpLocale)i,Rdp_AllowFiles)));
+        GetDlgItemTextW(localized,IDC_AUDIO,caption,ARRAYSIZE(caption));
+        assert(!wcscmp(caption,rdp_text_in((RdpLocale)i,Rdp_PlayRemoteAudio)));
+        assert(shown(GetDlgItem(localized,IDC_AUDIO))==!ssh);
+        assert(IsDlgButtonChecked(localized,IDC_AUDIO)==BST_UNCHECKED);
         assert(shown(GetDlgItem(localized,IDC_PORT)) && shown(GetDlgItem(localized,IDC_PORT_LABEL)));
         assert(login_port(localized)==(ssh?22:PROBE_RDP_DEFAULT_PORT));
         assert_login_columns(localized);
@@ -275,7 +281,7 @@ int main(void) {
     assert(connecting && shown(loginWindow) && !shown(window));
     assert(bounds(loginWindow).bottom==rdpExpanded.bottom);
     assert(probe_clipboard_enabled() && probe_clipboard_content_enabled() && !probe_clipboard_files_enabled());
-    SendMessageW(loginWindow,WM_COMMAND,IDOK,0);SetEvent(gate);wait_idle();assert(attempts==1);
+    SendMessageW(loginWindow,WM_COMMAND,IDOK,0);SetEvent(gate);wait_idle();assert(attempts==1 && !attemptedAudio);
     assert(shown(loginWindow) && !shown(window));
     wchar_t value[200];GetDlgItemTextW(loginWindow,IDC_ACCOUNT,value,ARRAYSIZE(value));assert(!wcscmp(value,L"fixture-user"));
     assert(!GetDlgItemTextW(loginWindow,IDC_PASSWORD,value,ARRAYSIZE(value)));
@@ -283,9 +289,10 @@ int main(void) {
     assert(IsWindowEnabled(GetDlgItem(loginWindow,IDOK)));
     scenario=2;ResetEvent(gate);SetDlgItemTextW(loginWindow,IDC_PASSWORD,L"retry-password");
     CheckDlgButton(loginWindow,IDC_FILES,BST_CHECKED);
+    SendDlgItemMessageW(loginWindow,IDC_AUDIO,BM_CLICK,0,0);
     SendMessageW(loginWindow,WM_COMMAND,IDOK,0);assert(!shown(window));SetEvent(gate);
     ULONGLONG until=GetTickCount64()+3000;while(loginWindow && GetTickCount64()<until){pump();Sleep(1);}
-    assert(!loginWindow && shown(window) && ready && attempts==2 && attemptedPort==3391 && fullscreen);
+    assert(!loginWindow && shown(window) && ready && attempts==2 && attemptedPort==3391 && attemptedAudio && fullscreen);
     enqueue(PROBE_SCAN,0x1c,0,0);assert(count==1);
     probe_reconnecting(1);pump();
     assert(shown(window) && fullscreen && !ready && reconnectAttempt==1 && count==0);

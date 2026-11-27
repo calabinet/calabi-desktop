@@ -89,6 +89,7 @@ static unsigned LoginPortValue(NSString *text) {
 @property(nonatomic, strong) LoginButton *cancelButton;
 @property(nonatomic, strong) NSButton *files;
 @property(nonatomic, strong) NSButton *remember;
+@property(nonatomic, strong) NSButton *audio;
 @property(nonatomic, strong) NSButton *forgetButton;
 @property(nonatomic, copy) void (^submit)(unsigned port);
 @property(nonatomic, copy) void (^dismiss)(void);
@@ -179,6 +180,11 @@ static unsigned LoginPortValue(NSString *text) {
             self.files.frame = NSMakeRect(20,0,360,22);
             self.files.font = [NSFont systemFontOfSize:12];
             [self.panel.contentView addSubview:self.files];
+            self.audio = [NSButton checkboxWithTitle:RDP_NS(PlayRemoteAudio) target:nil action:nil];
+            self.audio.state = NSControlStateValueOff;
+            self.audio.frame = self.files.frame;
+            self.audio.font = self.files.font;
+            [self.panel.contentView addSubview:self.audio];
         }
         self.remember = [NSButton checkboxWithTitle:RDP_NS(Remember) target:nil action:nil];
         self.remember.font = [NSFont systemFontOfSize:12];
@@ -207,7 +213,8 @@ static unsigned LoginPortValue(NSString *text) {
         self.account.nextKeyView = self.password;
         self.password.nextKeyView = self.port;
         self.port.nextKeyView = self.files ?: self.remember;
-        self.files.nextKeyView = self.remember;
+        self.files.nextKeyView = self.audio;
+        self.audio.nextKeyView = self.remember;
         self.remember.nextKeyView = self.forgetButton; self.forgetButton.nextKeyView = connect;
         connect.nextKeyView = cancel; cancel.nextKeyView = self.account;
         self.panel.initialFirstResponder = self.account;
@@ -229,6 +236,8 @@ static unsigned LoginPortValue(NSString *text) {
     CGFloat rememberTop = NSMinY(self.hint.frame) + 6 + (status.length ? NSHeight(self.hint.frame) : 0);
     if (self.files) {
         [self.files setFrameOrigin:NSMakePoint(20,rememberTop)];
+        rememberTop += 24;
+        [self.audio setFrameOrigin:NSMakePoint(20,rememberTop)];
         rememberTop += 24;
     }
     [self.remember setFrameOrigin:NSMakePoint(NSMinX(self.remember.frame),rememberTop)];
@@ -263,6 +272,7 @@ static unsigned LoginPortValue(NSString *text) {
     self.connecting = YES;
     self.account.enabled = NO; self.password.enabled = NO; self.port.enabled = NO;
     self.files.enabled = NO;
+    self.audio.enabled = NO;
     self.remember.enabled = NO; self.forgetButton.enabled = NO;
     self.connectButton.enabled = NO;
     self.connectButton.title = RDP_NS(Connecting);
@@ -273,6 +283,7 @@ static unsigned LoginPortValue(NSString *text) {
     self.connecting = NO;
     self.account.enabled = YES; self.password.enabled = YES; self.port.enabled = YES;
     self.files.enabled = YES;
+    self.audio.enabled = YES;
     self.remember.enabled = YES; self.forgetButton.enabled = YES;
     self.connectButton.enabled = YES; self.connectButton.title = RDP_NS(Connect);
     [self setStatus:message];

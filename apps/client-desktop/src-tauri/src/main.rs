@@ -298,11 +298,19 @@ fn main() {
         });
     log::info!("builder: +on_window_event");
     let app = app.on_window_event(|window, event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if window.label() == "main" {
-                let _ = window.hide();
-                api.prevent_close();
+        match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
+            tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                if window.label() == "main" {
+                    login_window::refresh_compact_window(window);
+                }
+            }
+            _ => {}
         }
     });
     log::info!("builder: entering .run() — plugins init here");

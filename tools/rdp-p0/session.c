@@ -8,6 +8,7 @@
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/input.h>
 #include <freerdp/settings.h>
+#include "audio_channel.h"
 #include <winpr/crt.h>
 #include <winpr/synch.h>
 #include "windows_session_diag.h"
@@ -16,10 +17,15 @@ BOOL clipboard_load(freerdp *rdp);
 void clipboard_poll(void);
 void clipboard_stop(void);
 int probe_clipboard_files_enabled(void);
+
+static BOOL load_playback_and_clipboard(freerdp *rdp) {
+    return load_audio_playback(rdp) && clipboard_load(rdp);
+}
 #if defined(_WIN32) || defined(__APPLE__)
 static uint16_t mesh_expected_port;
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) || (defined(_WIN32) && defined(CALABI_REMOTE_WORKSPACE))
+#define CALABI_RDP_DISPLAY
 #include "display_channel.h"
 #endif
 #ifdef CALABI_RDP_GFX
@@ -27,17 +33,39 @@ static uint16_t mesh_expected_port;
 #ifdef _WIN32
 #include "dynamic_channels.h"
 static FILE *gfx_diagnostic;
+#endif
+#endif
+#if defined(_WIN32) && (defined(CALABI_RDP_DISPLAY) || defined(CALABI_RDP_GFX))
 static BOOL win_preconnect(freerdp *rdp) {
-    return gfx_configure(rdp) && clipboard_start(rdp);
+#ifdef CALABI_RDP_GFX
+    if (!gfx_configure(rdp)) return FALSE;
+#endif
+#ifdef CALABI_RDP_DISPLAY
+    if (display.initialized && !display_start(rdp)) return FALSE;
+#endif
+    return clipboard_start(rdp);
 }
 static BOOL win_load_channels(freerdp *rdp) {
-    if (gfx_attempt.advertised && !rdp_load_drdynvc(rdp)) {
+    BOOL dynamicLoaded = TRUE;
+#ifdef CALABI_RDP_DISPLAY
+    if (display.initialized) dynamicLoaded = display_load(rdp);
+#ifdef CALABI_RDP_GFX
+    else
+#endif
+#endif
+#ifdef CALABI_RDP_GFX
+    if (gfx_attempt.advertised) dynamicLoaded = rdp_load_drdynvc(rdp);
+    if (gfx_attempt.advertised && !dynamicLoaded) {
         gfx_failed("drdynvc_load_failed", 0);
         return FALSE;
     }
-    return clipboard_load(rdp);
+#else
+    (void)dynamicLoaded; // Keep the classic connection if display control cannot load.
+#endif
+    return load_playback_and_clipboard(rdp);
 }
 #endif
+#ifdef CALABI_RDP_GFX
 static void gfx_log(const char *event, UINT32 value, UINT32 extra) {
 #ifdef _WIN32
     FILE *log = gfx_diagnostic;
@@ -57,7 +85,7 @@ static BOOL mac_preconnect(freerdp *rdp) {
 #endif
     return display_start(rdp) && clipboard_start(rdp);
 }
-static BOOL mac_load_channels(freerdp *rdp){return display_load(rdp) && clipboard_load(rdp);}
+static BOOL mac_load_channels(freerdp *rdp){return display_load(rdp) && load_playback_and_clipboard(rdp);}
 static BOOL mac_resize_desktop(rdpContext *context) {
     UINT32 w=freerdp_settings_get_uint32(context->settings,FreeRDP_DesktopWidth);
     UINT32 h=freerdp_settings_get_uint32(context->settings,FreeRDP_DesktopHeight);
@@ -203,9 +231,9 @@ static int connect_mesh_socket(rdpContext *context, rdpSettings *settings, const
 
 static int verify_leaf(freerdp *rdp, const BYTE *pem, size_t length,
                        const char *host, UINT16 port, DWORD flags) {
-    (void)rdp; (void)host; (void)port;
+    (void)rdp; (void)host;
     if (flags & (VERIFY_CERT_FLAG_GATEWAY | VERIFY_CERT_FLAG_REDIRECT)) return 0;
-    return probe_verify_leaf(pem, length) ? 2 : 0;
+    return probe_verify_leaf(pem, length, port) ? 2 : 0;
 }
 
 static BOOL paint(rdpContext *context) {
@@ -225,8 +253,8 @@ static BOOL paint(rdpContext *context) {
 #endif
     probe_frame(gdi->primary_buffer, gdi->width, gdi->height, gdi->stride);
     diag_frame();
-#ifdef __APPLE__
-    if(display.frameWidth!=(UINT32)gdi->width || display.frameHeight!=(UINT32)gdi->height){
+#ifdef CALABI_RDP_DISPLAY
+    if(display.initialized && (display.frameWidth!=(UINT32)gdi->width || display.frameHeight!=(UINT32)gdi->height)){
         display.frameWidth=(UINT32)gdi->width;display.frameHeight=(UINT32)gdi->height;
         struct probe_display frame={0};frame.width=display.frameWidth;frame.height=display.frameHeight;
         display_log("frame_received",&frame,0);
@@ -441,7 +469,7 @@ static BOOL transport_failure(int result) {
     return result == FREERDP_ERROR_CONNECT_TRANSPORT_FAILED;
 }
 
-static int connect_once(const char *host, uint16_t port, const char *domain, const char *user, const char *password,
+static int connect_once(const char *host, uint16_t port, const char *domain, const char *user, const char *password, int play_audio,
                         unsigned attempt, ARC_SC_PRIVATE_PACKET *cookie, BOOL *retryable) {
     *retryable = receivedPaint = meshTCPFailed = FALSE;
 #ifdef CALABI_REMOTE_WORKSPACE
@@ -461,6 +489,7 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
     if (!freerdp_context_new(rdp)) { freerdp_free(rdp); return -1; }
     int result = -1;
     rdpSettings *s = rdp->context->settings;
+    if (!configure_audio_playback(s, play_audio != 0)) goto cleanup;
 #ifdef _WIN32
     const rdpTransportIo *defaults = freerdp_get_io_callbacks(rdp->context);
     if (!defaults) goto cleanup;
@@ -487,11 +516,16 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
        !freerdp_settings_set_string(s,FreeRDP_ClientAddress,getenv("CALABI_RDP_LOCAL")))goto cleanup;
 #endif
     rdp->PreConnect = clipboard_start;
-    rdp->LoadChannels = clipboard_load;
+    rdp->LoadChannels = load_playback_and_clipboard;
 #if defined(_WIN32) && defined(CALABI_RDP_GFX)
     const wchar_t *log_path = _wgetenv(L"CALABI_RDP_GFX_LOG");
     if (log_path) gfx_diagnostic = _wfopen(log_path, L"a");
     if (gfx_attempt.fell_back) gfx_log("classic_retry", 0, 0);
+#endif
+#if defined(_WIN32) && (defined(CALABI_RDP_DISPLAY) || defined(CALABI_RDP_GFX))
+#ifdef CALABI_RDP_DISPLAY
+    if (probe_workspace_enabled() && !display_initialize(s)) goto cleanup;
+#endif
     rdp->PreConnect = win_preconnect;
     rdp->LoadChannels = win_load_channels;
 #endif
@@ -517,9 +551,12 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
         !freerdp_settings_set_bool(s, FreeRDP_RdpSecurity, FALSE) ||
         !freerdp_settings_set_bool(s, FreeRDP_TlsSecurity, FALSE)
 #ifndef __APPLE__
-        ||
-        !freerdp_settings_set_uint32(s, FreeRDP_DesktopWidth, 1920) ||
-        !freerdp_settings_set_uint32(s, FreeRDP_DesktopHeight, 1080)
+        || (
+#ifdef CALABI_RDP_DISPLAY
+            !display.initialized &&
+#endif
+            (!freerdp_settings_set_uint32(s, FreeRDP_DesktopWidth, 1920) ||
+             !freerdp_settings_set_uint32(s, FreeRDP_DesktopHeight, 1080)))
 #endif
         ) goto cleanup;
     diag_start(attempt);
@@ -587,6 +624,9 @@ static int connect_once(const char *host, uint16_t port, const char *domain, con
             initialFocus = FALSE;
         }
         ULONGLONG now = GetTickCount64();
+#ifdef CALABI_RDP_DISPLAY
+        if (display.initialized && diag_active) display_poll_at(now);
+#endif
 #ifdef CALABI_RDP_GFX
         if (gfx_attempt.failure || gfx_first_frame_timed_out(receivedPaint, now - activated)) break;
 #endif
@@ -662,7 +702,7 @@ cleanup:
     if(getenv("CALABI_RDP_FILE_MESH")){puts("rdp-copy-end");fflush(stdout);}
     if (rdp->context->gdi) gdi_free(rdp);
     freerdp_context_free(rdp);
-#ifdef __APPLE__
+#ifdef CALABI_RDP_DISPLAY
     display_stop();
 #endif
     clipboard_stop();
@@ -677,7 +717,7 @@ static int next_reconnect_attempt(unsigned attempt, BOOL retryable, BOOL painted
     return attempt == PROBE_RECONNECT_LIMIT ? PROBE_RECONNECT_EXHAUSTED : (int)attempt + 1;
 }
 
-int probe_connect(const char *host, uint16_t port, const char *domain, const char *user, const char *password) {
+int probe_connect(const char *host, uint16_t port, const char *domain, const char *user, const char *password, int play_audio) {
 #ifdef CALABI_REMOTE_WORKSPACE
     if(!workspace_start())return -2;
 #endif
@@ -700,7 +740,7 @@ int probe_connect(const char *host, uint16_t port, const char *domain, const cha
         workspace_left=workspace_right=FALSE;
 #endif
         BOOL retryable;
-        result = connect_once(host, port, domain, user, password, attempt, &cookie, &retryable);
+        result = connect_once(host, port, domain, user, password, play_audio, attempt, &cookie, &retryable);
         if (probe_requested_stop()
 #ifdef CALABI_REMOTE_WORKSPACE
             || workspace_stopped()

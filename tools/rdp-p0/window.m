@@ -62,10 +62,12 @@ void probe_workspace_display(unsigned width,unsigned height,unsigned scale) {
 // Desktop mode revalidates ownership, address and certificate via the parent
 // desktop's private pipe. Only the certificate seen on the wire is compared;
 // it can never become the trusted value.
-static BOOL verifyDevicePin(NSString *actual) {
+static BOOL verifyDevicePin(NSString *actual, uint16_t port) {
     if (!managedPin) return fingerprint.length == 64 && [actual isEqualToString:fingerprint];
     char reply[80];
-    fprintf(stdout,"rdp-pin %s\n",actual.UTF8String); fflush(stdout);
+    if (getenv("CALABI_RDP_REPORT_PORT")) fprintf(stdout,"rdp-pin %s %u\n",actual.UTF8String,(unsigned)port);
+    else fprintf(stdout,"rdp-pin %s\n",actual.UTF8String);
+    fflush(stdout);
     if (fgets(reply,sizeof(reply),stdin)) {
         NSString *pin = [[[NSString stringWithUTF8String:reply]
             stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] uppercaseString];
@@ -75,7 +77,7 @@ static BOOL verifyDevicePin(NSString *actual) {
     return NO;
 }
 
-int probe_verify_leaf(const uint8_t *pem, size_t length) {
+int probe_verify_leaf(const uint8_t *pem, size_t length, uint16_t port) {
     @autoreleasepool {
         NSString *chain = [[NSString alloc] initWithBytes:pem length:length encoding:NSASCIIStringEncoding];
         if (!chain) return 0;
@@ -89,7 +91,7 @@ int probe_verify_leaf(const uint8_t *pem, size_t length) {
         CC_SHA256(der.bytes, (CC_LONG)der.length, hash);
         NSMutableString *actual = [NSMutableString string];
         for (size_t i = 0; i < sizeof(hash); ++i) [actual appendFormat:@"%02X", hash[i]];
-        return verifyDevicePin(actual);
+        return verifyDevicePin(actual, port);
     }
 }
 
@@ -477,6 +479,7 @@ void calabi_rdp_prompt(void *nativeWindow) {
             LoginForm *form = weakLogin;
             clipboardEnabled = true;
             clipboardFilesEnabled = form.files.state == NSControlStateValueOn;
+            BOOL playAudio = form.audio.state == NSControlStateValueOn;
             NSString *account = form.account.stringValue;
             NSString *u = account, *d = @"", *p = form.password.stringValue;
             NSString *saved = nil;
@@ -517,7 +520,7 @@ void calabi_rdp_prompt(void *nativeWindow) {
                 [view recordDisplay];
             atomic_store(&sessionWorkerActive, true);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                int result = probe_connect(host.UTF8String, (uint16_t)port, d.UTF8String, u.UTF8String, p.UTF8String);
+                int result = probe_connect(host.UTF8String, (uint16_t)port, d.UTF8String, u.UTF8String, p.UTF8String, playAudio);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     atomic_store(&sessionWorkerActive, false);
                     if (probe_requested_stop()) return;
